@@ -6,15 +6,28 @@ import { spawn } from 'node:child_process'
 
 const projectRoot = resolve(import.meta.dirname, '..')
 const upstreamRoot = join(projectRoot, 'vendor', 'deepseek-harness')
-const outputRoot = join(projectRoot, 'build-resources', 'runtime')
+const targetArch = process.env.HARNESS_STUDIO_TARGET_ARCH ?? process.arch
+if (targetArch !== 'arm64' && targetArch !== 'x64') {
+  throw new Error(`package runtime: unsupported macOS architecture ${targetArch}`)
+}
+const runtimeDirectory = targetArch === 'arm64' ? 'runtime' : 'runtime-x64-final'
+const outputRoot = join(projectRoot, 'build-resources', runtimeDirectory)
 const nodeRoot = join(outputRoot, 'node')
 const harnessRoot = join(outputRoot, 'harness')
 const downloads = join(projectRoot, 'build-resources', 'downloads')
 const lock = JSON.parse(readFileSync(join(projectRoot, 'upstream-lock.json'), 'utf8'))
 const nodeVersion = lock.bundledNodeVersion
-const archiveName = `node-v${nodeVersion}-darwin-arm64.tar.gz`
+const archiveName = `node-v${nodeVersion}-darwin-${targetArch}.tar.gz`
 const archivePath = join(downloads, archiveName)
-const expectedSha256 = '4fc3266a3702eebc39cc37661cf4eeceeade307e242ab64e4d7ce7949197e11f'
+const nodeSha256 = {
+  arm64: '4fc3266a3702eebc39cc37661cf4eeceeade307e242ab64e4d7ce7949197e11f',
+  x64: '80da552fe037290cb130e9dea590f5eeeb7aa450636f0c89ab41415511c1ec27',
+}
+const expectedSha256 = nodeSha256[targetArch]
+const systemAddonPackage = '@deepseek-ai/node-addon-system-darwin-x64'
+const systemAddonVersion = '0.1.2'
+const systemAddonArchive = join(downloads, `deepseek-ai-node-addon-system-darwin-x64-${systemAddonVersion}.tgz`)
+const systemAddonSha512 = 'XDbmquNapk9aT28y4EKn9lbONVr9YNs1NM/GKH1Gi5gUhjOT9wgRaTv72FJdNaVIInbPAYbPoyn7/y+MzQMNNg=='
 
 async function download(url, path) {
   const response = await fetch(url)
@@ -45,7 +58,7 @@ async function prepareNode() {
   const actual = createHash('sha256').update(body).digest('hex')
   if (actual !== expectedSha256) throw new Error(`package runtime: checksum mismatch for ${archiveName}`)
   await new Promise((resolvePromise, reject) => {
-    const child = spawn('tar', ['-xOzf', archivePath, `node-v${nodeVersion}-darwin-arm64/bin/node`], {
+    const child = spawn('tar', ['-xOzf', archivePath, `node-v${nodeVersion}-darwin-${targetArch}/bin/node`], {
       stdio: ['ignore', 'pipe', 'inherit'],
     })
     const output = createWriteStream(destination, { flags: 'wx', mode: 0o755 })
@@ -56,6 +69,42 @@ async function prepareNode() {
   })
   await chmod(destination, 0o755)
   await run(destination, ['--version'])
+}
+
+async function prepareX64SystemAddon() {
+  if (targetArch !== 'x64') return
+  const destination = join(
+    harnessRoot,
+    'node_modules',
+    '@deepseek-ai',
+    'node-addon-system-darwin-x64',
+    'bin',
+    'system.node',
+  )
+  if (existsSync(destination)) return
+  await mkdir(dirname(destination), { recursive: true })
+  if (!existsSync(systemAddonArchive)) {
+    await download(
+      `https://registry.npmjs.org/${systemAddonPackage}/-/${systemAddonPackage.slice('@deepseek-ai/'.length)}-${systemAddonVersion}.tgz`,
+      systemAddonArchive,
+    )
+  }
+  const body = await readFile(systemAddonArchive)
+  const actual = createHash('sha512').update(body).digest('base64')
+  if (actual !== systemAddonSha512) {
+    throw new Error(`package runtime: integrity mismatch for ${systemAddonPackage}@${systemAddonVersion}`)
+  }
+  await new Promise((resolvePromise, reject) => {
+    const child = spawn('tar', ['-xOzf', systemAddonArchive, 'package/bin/system.node'], {
+      stdio: ['ignore', 'pipe', 'inherit'],
+    })
+    const output = createWriteStream(destination, { flags: 'wx', mode: 0o755 })
+    child.stdout.pipe(output)
+    child.once('error', reject)
+    output.once('error', reject)
+    child.once('exit', code => code === 0 ? resolvePromise() : reject(new Error(`tar exited with ${code}`)))
+  })
+  await chmod(destination, 0o755)
 }
 
 async function copyPackageWithoutDependencies(source, target) {
@@ -180,16 +229,37 @@ async function prepareHarness() {
       throw new Error(`package runtime: ${harnessRoot} is incomplete; move it aside manually before retrying`)
     }
     mkdirSync(join(outputRoot), { recursive: true })
-    await run('pnpm', [
+    const deployArgs = [
       '--dir', upstreamRoot,
+      '--cpu', targetArch,
+      '--os', 'darwin',
+      ...(targetArch === 'x64' ? ['--ignore-scripts'] : []),
       '--filter', '@deepseek-ai/dsh-desktop-host',
       'deploy', '--prod', '--legacy', harnessRoot,
-    ], { env: { ...process.env, CI: 'true' } })
+    ]
+    if (targetArch === 'x64') {
+      const pnpmEntry = join(
+        upstreamRoot,
+        'node_modules',
+        '.pnpm',
+        'pnpm@11.7.0',
+        'node_modules',
+        'pnpm',
+        'dist',
+        'pnpm.mjs',
+      )
+      await run(join(nodeRoot, 'node'), [pnpmEntry, ...deployArgs], {
+        env: { ...process.env, CI: 'true', npm_config_arch: 'x64', npm_config_platform: 'darwin' },
+      })
+    } else {
+      await run('pnpm', deployArgs, { env: { ...process.env, CI: 'true' } })
+    }
     const scope = join(harnessRoot, 'node_modules', '@deepseek-ai')
     const selfLink = join(scope, 'dsh-desktop-host')
     if (!existsSync(selfLink)) symlinkSync('../..', selfLink)
   }
   if (!existsSync(entry)) throw new Error('package runtime: deployed Harness omits the Desktop Host entry')
+  let materialized = await materializeExternalLinks(harnessRoot)
   const scheduledTasksTarget = join(harnessRoot, 'node_modules', '@deepseek-ai', 'dsh-scheduled-tasks')
   const scheduledControllerTarget = join(harnessRoot, 'node_modules', '@deepseek-ai', 'dsh-api-scheduled-task-controller')
   const webFetchTarget = join(harnessRoot, 'node_modules', '@deepseek-ai', 'dsh-web-fetch-http')
@@ -200,7 +270,16 @@ async function prepareHarness() {
     mkdir(join(webFetchTarget, 'lib'), { recursive: true }),
     mkdir(join(llmPiAiTarget, 'lib'), { recursive: true }),
   ])
-  await Promise.all([
+  const requiredLibs = [
+    [join(upstreamRoot, 'packages', 'schedule', 'scheduled-tasks', 'lib'), join(scheduledTasksTarget, 'lib')],
+    [join(upstreamRoot, 'packages', 'api', 'scheduled-task-controller', 'lib'), join(scheduledControllerTarget, 'lib')],
+    [join(upstreamRoot, 'packages', 'web', 'web-fetch-http', 'lib'), join(webFetchTarget, 'lib')],
+    [join(upstreamRoot, 'packages', 'llm', 'llm-pi-ai', 'lib'), join(llmPiAiTarget, 'lib')],
+  ]
+  await Promise.all(requiredLibs
+    .filter(([, target]) => !existsSync(join(target, 'index.js')))
+    .map(([source, target]) => cp(source, target, { recursive: true, dereference: true })))
+  if (targetArch === 'arm64') await Promise.all([
     copyFile(join(upstreamRoot, 'apps', 'desktop-host', 'package.json'), join(harnessRoot, 'package.json')),
     copyFile(join(upstreamRoot, 'apps', 'desktop-host', 'lib', 'index.js'), entry),
     copyFile(
@@ -244,9 +323,10 @@ async function prepareHarness() {
       { recursive: true, dereference: true },
     ),
   ])
-  const materialized = await materializeExternalLinks(harnessRoot)
+  materialized += await materializeExternalLinks(harnessRoot)
   const added = await materializeInternalClosure(harnessRoot)
   const hoisted = await linkHoistedDependencies(harnessRoot)
+  await prepareX64SystemAddon()
   console.log(`package runtime: materialized ${materialized} external link(s), ${added} internal peer package(s), and ${hoisted} hoisted dependency link(s)`)
 }
 
@@ -259,10 +339,10 @@ async function prepareMemoryServer() {
   ])
 }
 
-if (process.platform !== 'darwin' || process.arch !== 'arm64') {
-  throw new Error('package runtime: this release target requires macOS arm64')
+if (process.platform !== 'darwin') {
+  throw new Error('package runtime: this release target requires macOS')
 }
 await prepareNode()
 await prepareHarness()
 await prepareMemoryServer()
-console.log(`package runtime: Node ${nodeVersion} and Harness ${lock.dshVersion} ready`)
+console.log(`package runtime: Node ${nodeVersion}, Harness ${lock.dshVersion}, and macOS ${targetArch} ready`)

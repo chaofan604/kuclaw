@@ -1,0 +1,33 @@
+{
+  "appId": "ai.harnessstudio.desktop",
+  "productName": "Harness Studio",
+  "asar": true,
+  "directories": {
+    "output": "release-x64"
+  },
+  "files": [
+    "dist/**/*",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": "build-resources/runtime-x64-final/node",
+      "to": "runtime/node"
+    },
+    {
+      "from": "build-resources/runtime-x64-final/harness",
+      "to": "runtime/harness"
+    },
+    {
+      "from": "build-resources/runtime-x64-final/harness/node_modules",
+      "to": "runtime/harness/node_modules",
+      "filter": [
+        "**/*"
+      ]
+    }
+  ],
+  "mac": {
+    "category": "public.app-category.developer-tools",
+    "icon": "build-resources/icon.icns"
+  }
+}
