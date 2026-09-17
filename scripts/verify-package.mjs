@@ -10,7 +10,7 @@
  */
 import { readFileSync, existsSync } from 'node:fs'
 import { mkdtemp, mkdir, readFile, readlink, rm, symlink } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 
@@ -21,6 +21,7 @@ const target = process.argv[2] ?? 'mac-arm64'
 const releaseRoot = process.argv[3] === undefined ? join(projectRoot, 'release') : join(projectRoot, process.argv[3])
 const asarPath = join(releaseRoot, target, `${productName}.app`, 'Contents', 'Resources', 'app.asar')
 const resourcesPath = join(releaseRoot, target, `${productName}.app`, 'Contents', 'Resources')
+const harnessRuntimeRoot = join(resourcesPath, 'runtime', 'harness')
 
 if (!existsSync(asarPath)) {
   console.error(`verify-package: missing ${asarPath}`)
@@ -28,6 +29,11 @@ if (!existsSync(asarPath)) {
 }
 
 const raw = readFileSync(asarPath)
+const localHome = homedir()
+if (localHome !== '' && raw.includes(Buffer.from(localHome))) {
+  console.error(`verify-package: app.asar contains the build user's home path ${localHome}`)
+  process.exit(1)
+}
 const pickleSize = raw.readUInt32LE(4)
 const jsonSize = raw.readUInt32LE(12)
 const header = JSON.parse(raw.subarray(16, 16 + jsonSize).toString('utf8'))
@@ -89,6 +95,28 @@ const dshVersion = JSON.parse(readFileSync(dshManifest, 'utf8')).version
 if (dshVersion !== upstreamLock.dshVersion) {
   console.error(`verify-package: bundled Harness ${dshVersion} != ${upstreamLock.dshVersion}`)
   process.exit(1)
+}
+
+const forbiddenUserState = [
+  'home',
+  'profile',
+  'daily',
+  'sessions',
+  'daily-sessions',
+  'memory',
+  '.credentials.yaml',
+  '.env',
+  'workspace.json',
+  'scheduled-tasks.sqlite',
+  'memory.sqlite',
+  'harness-studio-mcp.json',
+]
+for (const relativePath of forbiddenUserState) {
+  const packagedPath = join(harnessRuntimeRoot, relativePath)
+  if (existsSync(packagedPath)) {
+    console.error(`verify-package: bundled runtime contains user state ${packagedPath}`)
+    process.exit(1)
+  }
 }
 
 async function verifyApplicationStartup() {
