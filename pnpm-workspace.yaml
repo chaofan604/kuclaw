@@ -1,0 +1,10 @@
+packages: []
+
+# pnpm blocks dependency lifecycle scripts until this project records an
+# explicit decision. Electron downloads its pinned runtime and esbuild installs
+# its platform binary; the optional Windows installer hook is unused on the
+# current macOS target.
+allowBuilds:
+  electron: true
+  esbuild: true
+  electron-winstaller: false

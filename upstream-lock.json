@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/deepseek-ai/deepseek-harness.git",
+  "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+  "dshVersion": "0.1.5-rc.2",
+  "desktopHostProtocolVersion": 3,
+  "bundledNodeVersion": "24.17.0"
+}

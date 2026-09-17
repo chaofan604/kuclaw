@@ -1,0 +1,16 @@
+node_modules/
+.pnpm-store/
+dist/
+release/
+release-validation-*/
+build-resources/*
+!build-resources/icon.svg
+!build-resources/icon.icns
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+.harness-studio/
+vendor/deepseek-harness/.gitdir-upstream
+vendor/deepseek-harness/.gitmodules-upstream

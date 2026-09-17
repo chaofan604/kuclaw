@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="shell" x1="176" y1="112" x2="846" y2="922" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#35322D"/>
+      <stop offset="0.52" stop-color="#211F1C"/>
+      <stop offset="1" stop-color="#151412"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="178" y1="128" x2="824" y2="884" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFB36A" stop-opacity="0.78"/>
+      <stop offset="0.34" stop-color="#BC7441" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#0E0D0C" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="278" y1="278" x2="755" y2="755" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFD09B"/>
+      <stop offset="0.42" stop-color="#F59A50"/>
+      <stop offset="1" stop-color="#D85E2E"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(512 500) rotate(90) scale(430)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EE8846" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#EE8846" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="28" y="42" width="968" height="986" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="28" stdDeviation="28" flood-color="#000" flood-opacity="0.38"/>
+    </filter>
+    <filter id="markShadow" x="220" y="222" width="586" height="590" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000" flood-opacity="0.34"/>
+    </filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <rect x="72" y="62" width="880" height="880" rx="216" fill="url(#shell)"/>
+    <rect x="73.5" y="63.5" width="877" height="877" rx="214.5" fill="none" stroke="url(#rim)" stroke-width="3"/>
+    <rect x="96" y="86" width="832" height="832" rx="194" fill="url(#glow)"/>
+    <path d="M169 247C216 153 305 108 433 95" fill="none" stroke="#FFF" stroke-opacity="0.08" stroke-width="18" stroke-linecap="round"/>
+  </g>
+  <g filter="url(#markShadow)" fill="none" stroke="url(#mark)" stroke-width="84" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M318 310V704"/>
+    <path d="M706 310V704"/>
+    <path d="M322 507H702"/>
+  </g>
+  <g fill="#241B15" stroke="#FFD09B" stroke-width="21">
+    <circle cx="318" cy="310" r="45"/>
+    <circle cx="706" cy="310" r="45"/>
+    <circle cx="318" cy="704" r="45"/>
+    <circle cx="706" cy="704" r="45"/>
+  </g>
+  <rect x="456" y="451" width="112" height="112" rx="31" transform="rotate(45 512 507)" fill="#FFF0DC" stroke="#F48E47" stroke-width="18"/>
+  <circle cx="512" cy="507" r="19" fill="#C9562B"/>
+</svg>

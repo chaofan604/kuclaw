@@ -1,0 +1,14 @@
+---
+description: Treat every visible interface as production SaaS product UI
+alwaysApply: true
+---
+
+# Production UI Standard
+
+Harness Studio is intended for external SaaS users. Every user-visible change must use polished product copy and interaction design suitable for non-technical customers.
+
+- Describe user intent and outcome, not implementation details. Never expose test prompts such as `hello`, IPC or RPC method names, Electron errors, internal service names, stack traces, or transport terminology.
+- Convert internal failures into concise actionable Chinese messages. Keep detailed diagnostics in the main-process log only.
+- Use stable status language such as “正在检测连接”“连接正常”“连接失败”，and avoid developer-oriented narration.
+- Truncate secondary details gracefully, preserve clear visual hierarchy, and verify loading, success, empty, disabled, and failure states before considering UI work complete.
+- Treat screenshots and copy as release-quality product surfaces, not development placeholders.

@@ -1,0 +1,41 @@
+{
+  "name": "@deepseek-ai/dsh-scheduled-tasks",
+  "description": "Host-scoped persistent scheduled tasks that launch independent Sessions",
+  "version": "0.1.5-rc.2",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+    "directory": "packages/schedule/scheduled-tasks"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/types/**/*.d.ts"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/dsh-api-session-controller": "workspace:^",
+    "@deepseek-ai/dsh-brand": "workspace:^"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "workspace:^"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/dsh-api-session-controller": "workspace:^",
+    "@deepseek-ai/dsh-brand": "workspace:^"
+  }
+}

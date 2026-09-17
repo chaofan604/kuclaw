@@ -1,0 +1,85 @@
+{
+  "name": "harness-studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A focused desktop coding agent powered by DeepSeek Harness",
+  "type": "module",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:harness": "node scripts/dev.mjs --harness",
+    "build:main": "tsc -p tsconfig.main.json && pnpm run build:preload",
+    "build:preload": "esbuild src/main/preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist/main/preload.cjs",
+    "build:renderer": "vite build",
+    "build": "pnpm run build:main && pnpm run build:renderer",
+    "prepare:package-runtime": "node scripts/prepare-package-runtime.mjs",
+    "setup:harness": "CI=true pnpm --dir vendor/deepseek-harness install && pnpm --dir vendor/deepseek-harness run build:lib:host",
+    "upstream:verify": "node scripts/verify-upstream.mjs",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
+    "test": "vitest run",
+    "start": "pnpm run build && electron .",
+    "package:dir": "pnpm run build && pnpm run prepare:package-runtime && electron-builder --dir --mac --arm64 && node scripts/verify-package.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "dotenv": "^16.6.1",
+    "prism-react-renderer": "^2.4.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "yaml": "^2.9.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^24.3.0",
+    "@types/react": "^18.3.1",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.0.0",
+    "electron": "^44.0.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.25.12",
+    "jsdom": "^26.1.0",
+    "typescript": "^6.0.3",
+    "vite": "^6.0.0",
+    "vitest": "^4.1.8"
+  },
+  "build": {
+    "appId": "ai.harnessstudio.desktop",
+    "productName": "Harness Studio",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build-resources/runtime/node",
+        "to": "runtime/node"
+      },
+      {
+        "from": "build-resources/runtime/harness",
+        "to": "runtime/harness"
+      },
+      {
+        "from": "build-resources/runtime/harness/node_modules",
+        "to": "runtime/harness/node_modules",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build-resources/icon.icns"
+    }
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "packageManager": "pnpm@11.7.0"
+}

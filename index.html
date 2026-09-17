@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:5173 ws://127.0.0.1:5173"
+    />
+    <title>Harness Studio</title>
+  </head>
+  <body>
+    <div id="root">
+      <main style="min-height:100vh;display:grid;place-items:center;background:#1f1e1b;color:#ecebe7;font-family:-apple-system,BlinkMacSystemFont,sans-serif">
+        <p>Harness Studio 正在启动。如果你直接打开了这个 HTML 文件，请改为运行 <code>pnpm dev</code> 或打包后的应用。</p>
+      </main>
+    </div>
+    <script type="module" src="/src/renderer/main.tsx"></script>
+  </body>
+</html>
