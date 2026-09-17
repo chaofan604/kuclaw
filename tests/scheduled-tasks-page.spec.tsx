@@ -75,12 +75,18 @@ afterEach(() => {
 })
 
 describe('ScheduledTasksPage', () => {
-  it('renders tasks and the run history of the selected task', async () => {
-    mockApi()
+  it('opens run history from the task card instead of rendering it beside the list', async () => {
+    const api = mockApi()
     render(<ScheduledTasksPage modelConfiguration={modelConfiguration} onOpenSession={vi.fn()} />)
     expect(await screen.findByText('每日代码检查')).toBeDefined()
-    expect(screen.getByText(/Asia\/Shanghai/u, { selector: 'code' })).toBeDefined()
+    expect(screen.getByText('Asia/Shanghai', { selector: '.scheduled-card-schedule i' })).toBeDefined()
+    expect(screen.queryByRole('dialog', { name: '每日代码检查 运行历史' })).toBeNull()
+    expect(api.scheduledTasks.listRuns).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: '运行历史' }))
+    expect(await screen.findByRole('dialog', { name: '每日代码检查 运行历史' })).toBeDefined()
     expect(await screen.findByText('成功')).toBeDefined()
+    expect(api.scheduledTasks.listRuns).toHaveBeenCalledWith('task-1', 50)
   })
 
   it('creates a task from the editor form', async () => {
@@ -88,6 +94,9 @@ describe('ScheduledTasksPage', () => {
     api.workspace.pick = vi.fn().mockResolvedValue('/Users/demo/picked')
     render(<ScheduledTasksPage modelConfiguration={modelConfiguration} onOpenSession={vi.fn()} />)
     fireEvent.click(await screen.findByText('创建定时任务'))
+    expect(document.querySelector('.scheduled-timing-grid')).toBeTruthy()
+    expect(screen.getByText('格式：分 时 日 月 周')).toBeDefined()
+    expect(screen.getByText('IANA 时区，例如 Asia/Shanghai')).toBeDefined()
 
     fireEvent.change(screen.getByPlaceholderText('每日代码检查'), { target: { value: '每周巡检' } })
     fireEvent.click(screen.getByText('选择…'))
@@ -124,7 +133,17 @@ describe('ScheduledTasksPage', () => {
     mockApi()
     const onOpenSession = vi.fn()
     render(<ScheduledTasksPage modelConfiguration={modelConfiguration} onOpenSession={onOpenSession} />)
+    fireEvent.click(await screen.findByRole('button', { name: '运行历史' }))
     fireEvent.click(await screen.findByText('打开 Session'))
     expect(onOpenSession).toHaveBeenCalledWith('session-1')
+  })
+
+  it('closes the run history layout', async () => {
+    mockApi()
+    render(<ScheduledTasksPage modelConfiguration={modelConfiguration} onOpenSession={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('button', { name: '运行历史' }))
+    expect(await screen.findByRole('dialog', { name: '每日代码检查 运行历史' })).toBeDefined()
+    fireEvent.click(screen.getByRole('button', { name: '关闭运行历史' }))
+    expect(screen.queryByRole('dialog', { name: '每日代码检查 运行历史' })).toBeNull()
   })
 })

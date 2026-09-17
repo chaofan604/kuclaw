@@ -205,7 +205,8 @@ describe('Harness session restoration', () => {
       messages: [{
         id: 'goal-command-1',
         role: 'user',
-        text: '/goal 交付可用版本',
+        text: '交付可用版本',
+        invocation: { kind: 'goal', name: 'goal', label: '目标' },
       }],
     })
 
@@ -278,11 +279,13 @@ describe('Harness session restoration', () => {
       messages: [
         {
           id: 'goal-command-1',
-          text: '/goal 交付可用版本',
+          text: '交付可用版本',
+          invocation: { kind: 'goal', name: 'goal', label: '目标' },
         },
         {
           id: 'message-1',
           text: '设计迁移方案',
+          invocation: { kind: 'plan', name: 'plan', label: '计划' },
           attachments: [{ id: 'sha256:brief', name: 'brief.pdf', bytes: 42 }],
         },
         {

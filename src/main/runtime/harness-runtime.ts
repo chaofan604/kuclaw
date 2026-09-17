@@ -43,6 +43,7 @@ import type {
   CommandSummary,
   ComposerCommandSubmission,
   ComposerFileAttachment,
+  ComposerImageUpload,
   ComposerSubmission,
   ToolCard,
 } from '../../shared/contracts.js'
@@ -50,6 +51,12 @@ import { HarnessHostClient, HarnessRemoteError } from './dsh-host-client.js'
 import type { HarnessHostProcess } from './dsh-host-process.js'
 import type { AgentRuntime } from './runtime.js'
 import { testModelConnection } from './model-connection-test.js'
+import {
+  inferInputModalities,
+  inferReasoningProfile,
+  type ModelInputModality,
+  type ReasoningEffortMap,
+} from './model-reasoning.js'
 import { MODEL_STREAM_IDLE_TIMEOUT_MS, PERMISSION_PROJECTION_TIMEOUT_MS } from './harness-policy.js'
 import type { LocalSkillLibrary } from './skill-library.js'
 
@@ -127,12 +134,15 @@ interface HarnessPiProviderProfile {
   readonly displayName?: string
   readonly api?: string
   readonly baseURL?: string
+  readonly reasoning?: string
   readonly streamIdleTimeoutMs?: number
   readonly models?: readonly {
     readonly id?: string
     readonly name?: string
     readonly contextWindow?: number
     readonly maxTokens?: number
+    readonly input?: readonly ModelInputModality[]
+    readonly reasoningEfforts?: false | ReasoningEffortMap
   }[]
 }
 
@@ -368,14 +378,19 @@ function messageOf(event: HarnessWireEvent): ChatMessage | undefined {
       || typeof event.data.commandId !== 'string'
       || !isRecord(source)
       || source.kind !== 'user') return undefined
-    const args = typeof event.data.args === 'string' ? event.data.args.trimEnd() : ''
+    const args = typeof event.data.args === 'string' ? event.data.args.trim() : ''
     return {
       id: event.data.commandId,
       role: 'user',
-      text: `/goal${args}`,
+      text: args,
       createdAt: event.time,
       state: 'complete',
       sequence: event.seq,
+      invocation: {
+        kind: 'goal',
+        name: 'goal',
+        label: '目标',
+      },
     }
   }
   if (event.type === 'user/message') {
@@ -429,9 +444,18 @@ function turnFailureMessage(reason: unknown): string | undefined {
 export function projectMessages(events: readonly HarnessWireEvent[]): ChatMessage[] {
   const messages: ChatMessage[] = []
   const answeredTurns = new Set<number>()
+  let pendingPlanText: string | undefined
   for (const event of events) {
+    if (event.type === 'command/run' && isRecord(event.data) && event.data.name === 'plan'
+      && isRecord(event.data.source) && event.data.source.kind === 'user') {
+      pendingPlanText = typeof event.data.args === 'string' ? event.data.args.trim() : ''
+    }
     const message = messageOf(event)
     if (message !== undefined) {
+      if (message.role === 'user' && pendingPlanText !== undefined && message.text.trim() === pendingPlanText) {
+        message.invocation = { kind: 'plan', name: 'plan', label: '计划' }
+        pendingPlanText = undefined
+      }
       messages.push(message)
       if (event.type === 'assistant/message' && message.presentation === 'answer'
         && isRecord(event.data) && typeof event.data.turn === 'number') answeredTurns.add(event.data.turn)
@@ -726,6 +750,26 @@ function credentialRefForProfile(profileId: string): string {
   return `HARNESS_STUDIO_MODEL_${digest}_API_KEY`
 }
 
+function sameReasoningEfforts(
+  left: false | ReasoningEffortMap | undefined,
+  right: ReasoningEffortMap,
+): boolean {
+  if (left === false || left === undefined) return false
+  const leftEntries = Object.entries(left)
+  const rightEntries = Object.entries(right)
+  return leftEntries.length === rightEntries.length
+    && rightEntries.every(([key, value]) => left[key] === value)
+}
+
+function sameInputModalities(
+  left: readonly ModelInputModality[] | undefined,
+  right: readonly ModelInputModality[],
+): boolean {
+  return left !== undefined
+    && left.length === right.length
+    && right.every((value, index) => left[index] === value)
+}
+
 function rawProfiles(settings: HarnessSettingsDescription): Record<string, HarnessPiProviderProfile> {
   const providers = namespaceValue(settings, 'llm-pi-ai').value.providers
   if (!isRecord(providers)) return {}
@@ -940,6 +984,23 @@ interface HarnessFileUploadValue {
     readonly name: string
     readonly bytes: number
   }
+}
+
+const UPLOAD_CHUNK_BYTES = 24 * 1024
+
+function uploadByteStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
+  let offset = 0
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (offset >= bytes.byteLength) {
+        controller.close()
+        return
+      }
+      const end = Math.min(offset + UPLOAD_CHUNK_BYTES, bytes.byteLength)
+      controller.enqueue(bytes.subarray(offset, end))
+      offset = end
+    },
+  })
 }
 
 type PromptContentPart =
@@ -1176,7 +1237,26 @@ export class HarnessAgentRuntime implements AgentRuntime {
     this.assertOpen()
     await this.ensureFollower(sessionId)
     const query = new URLSearchParams({ sessionId, name: basename(path) })
-    const stream = Readable.toWeb(createReadStream(path)) as ReadableStream<Uint8Array>
+    const stream = Readable.toWeb(createReadStream(path, {
+      highWaterMark: UPLOAD_CHUNK_BYTES,
+    })) as ReadableStream<Uint8Array>
+    const uploaded = await this.client.postStream<HarnessFileUploadValue>(
+      `/api/session/uploadFileBinary?${query.toString()}`,
+      stream,
+      { 'content-type': 'application/octet-stream' },
+    )
+    return {
+      receiptId: uploaded.receiptId,
+      name: uploaded.file.name,
+      bytes: uploaded.file.bytes,
+    }
+  }
+
+  async uploadImage(sessionId: string, image: ComposerImageUpload): Promise<ComposerFileAttachment> {
+    this.assertOpen()
+    await this.ensureFollower(sessionId)
+    const query = new URLSearchParams({ sessionId, name: image.name })
+    const stream = uploadByteStream(image.bytes)
     const uploaded = await this.client.postStream<HarnessFileUploadValue>(
       `/api/session/uploadFileBinary?${query.toString()}`,
       stream,
@@ -1221,25 +1301,71 @@ export class HarnessAgentRuntime implements AgentRuntime {
 
   async getModelConfiguration(): Promise<ModelConfiguration> {
     this.assertOpen()
-    const [catalog, describedSettings] = await Promise.all([
+    let [catalog, settings] = await Promise.all([
       this.client.call<HarnessModelCatalog>('session/modelCatalog', {}),
       this.client.call<HarnessSettingsDescription>('settings/describe', {}),
     ])
-    let settings = describedSettings
-    const profilesNeedingPolicy = Object.entries(rawProfiles(settings))
-      .filter(([, profile]) => profile.streamIdleTimeoutMs !== MODEL_STREAM_IDLE_TIMEOUT_MS)
-    if (settings.writable && profilesNeedingPolicy.length > 0) {
-      const section = namespaceValue(settings, 'llm-pi-ai')
-      await this.client.call('settings/mutate', {
-        ns: 'llm-pi-ai',
-        ops: profilesNeedingPolicy.map(([id]) => ({
+    const profilePolicyOps = Object.entries(rawProfiles(settings)).flatMap(([id, profile]) => {
+      const ops: Array<{ op: 'set'; path: string[]; value: unknown }> = []
+      if (profile.streamIdleTimeoutMs !== MODEL_STREAM_IDLE_TIMEOUT_MS) {
+        ops.push({
           op: 'set',
           path: ['providers', id, 'streamIdleTimeoutMs'],
           value: MODEL_STREAM_IDLE_TIMEOUT_MS,
-        })),
+        })
+      }
+      const models = profile.models ?? []
+      let modelsChanged = false
+      const inferredDefaults: string[] = []
+      const nextModels = models.map(model => {
+        if (typeof model.id !== 'string' || !isModelProtocol(profile.api)) return model
+        const inferred = inferReasoningProfile(model.id, profile.api)
+        const inferredInput = inferInputModalities(model.id)
+        if (inferred !== undefined) inferredDefaults.push(inferred.defaultEffort)
+        const reasoningCurrent = inferred === undefined
+          || sameReasoningEfforts(model.reasoningEfforts, inferred.efforts)
+        const inputCurrent = inferredInput === undefined
+          || sameInputModalities(model.input, inferredInput)
+        if (reasoningCurrent && inputCurrent) return model
+        modelsChanged = true
+        return {
+          ...model,
+          ...(inferred === undefined ? {} : { reasoningEfforts: inferred.efforts }),
+          ...(inferredInput === undefined ? {} : { input: inferredInput }),
+        }
+      })
+      if (modelsChanged) {
+        ops.push({
+          op: 'set',
+          path: ['providers', id, 'models'],
+          value: nextModels,
+        })
+      }
+      const commonDefault = inferredDefaults[0]
+      if (profile.reasoning === undefined
+        && models.length > 0
+        && inferredDefaults.length === models.length
+        && commonDefault !== undefined
+        && inferredDefaults.every(effort => effort === commonDefault)) {
+        ops.push({
+          op: 'set',
+          path: ['providers', id, 'reasoning'],
+          value: commonDefault,
+        })
+      }
+      return ops
+    })
+    if (settings.writable && profilePolicyOps.length > 0) {
+      const section = namespaceValue(settings, 'llm-pi-ai')
+      await this.client.call('settings/mutate', {
+        ns: 'llm-pi-ai',
+        ops: profilePolicyOps,
         expectedRevision: section.revision,
       })
-      settings = await this.client.call<HarnessSettingsDescription>('settings/describe', {})
+      ;[catalog, settings] = await Promise.all([
+        this.client.call<HarnessModelCatalog>('session/modelCatalog', {}),
+        this.client.call<HarnessSettingsDescription>('settings/describe', {}),
+      ])
     }
     const profiles = rawProfiles(settings)
     const credentialRefs = new Set(['DEEPSEEK_API_KEY'])
@@ -1313,6 +1439,31 @@ export class HarnessAgentRuntime implements AgentRuntime {
         }
       }
       const previousProfile = rawProfiles(settings)[profile.id]
+      const previousModels = new Map((previousProfile?.models ?? [])
+        .flatMap(model => typeof model.id === 'string' ? [[model.id, model] as const] : []))
+      const models = profile.models.map(model => {
+        const id = model.id.trim()
+        const previous = previousModels.get(id)
+        const inferred = inferReasoningProfile(id, profile.protocol)
+        const inferredInput = inferInputModalities(id)
+        return {
+          id,
+          name: model.name.trim() === '' ? id : model.name.trim(),
+          contextWindow: model.contextWindow,
+          maxTokens: model.maxTokens,
+          input: inferredInput ?? previous?.input ?? ['text'],
+          ...(inferred !== undefined
+            ? { reasoningEfforts: inferred.efforts }
+            : previous?.reasoningEfforts === undefined
+              ? {}
+              : { reasoningEfforts: previous.reasoningEfforts }),
+        }
+      })
+      const inferredDefaults = models.flatMap(model => {
+        const inferred = inferReasoningProfile(model.id, profile.protocol)
+        return inferred === undefined ? [] : [inferred.defaultEffort]
+      })
+      const commonDefault = inferredDefaults[0]
       await this.client.call('settings/mutate', {
         ns: 'llm-pi-ai',
         ops: [{
@@ -1324,13 +1475,15 @@ export class HarnessAgentRuntime implements AgentRuntime {
             api: profile.protocol,
             baseURL: profile.baseURL.trim(),
             streamIdleTimeoutMs: MODEL_STREAM_IDLE_TIMEOUT_MS,
-            models: profile.models.map(model => ({
-              id: model.id.trim(),
-              name: model.name.trim() === '' ? model.id.trim() : model.name.trim(),
-              contextWindow: model.contextWindow,
-              maxTokens: model.maxTokens,
-              input: ['text'],
-            })),
+            ...(previousProfile?.reasoning !== undefined
+              ? { reasoning: previousProfile.reasoning }
+              : models.length > 0
+                && inferredDefaults.length === models.length
+                && commonDefault !== undefined
+                && inferredDefaults.every(effort => effort === commonDefault)
+                ? { reasoning: commonDefault }
+                : {}),
+            models,
           },
         }],
         expectedRevision: section.revision,

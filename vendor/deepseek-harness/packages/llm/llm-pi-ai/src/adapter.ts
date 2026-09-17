@@ -114,13 +114,23 @@ export interface PiAiAuthInjection {
 /** Copy profile stream knobs into pi-ai's common option vocabulary. */
 function profileOptions(
   profile: ResolvedPiAiProviderProfile,
+  model: Model<Api>,
   reasoning: ModelThinkingLevel | undefined,
   apiKey: string | undefined,
 ): SimpleStreamOptions {
   const enabledReasoning: ThinkingLevel | undefined = reasoning === 'off' ? undefined : reasoning
+  const responseReasoning = model.api === 'openai-responses' && enabledReasoning !== undefined
+    ? {
+      reasoning: {
+        effort: model.thinkingLevelMap?.[enabledReasoning] ?? enabledReasoning,
+      },
+      include: undefined,
+    }
+    : undefined
   return {
     ...apiKey === undefined ? {} : { apiKey },
     ...enabledReasoning === undefined ? {} : { reasoning: enabledReasoning },
+    ...responseReasoning === undefined ? {} : { samplingParams: responseReasoning },
     ...profile.thinkingBudgets === undefined ? {} : { thinkingBudgets: profile.thinkingBudgets },
     ...profile.cacheRetention === undefined ? {} : { cacheRetention: profile.cacheRetention },
     ...profile.transport === undefined ? {} : { transport: profile.transport },
@@ -378,7 +388,7 @@ export class PiAiAdapter extends LlmAdapter {
           },
         }, onReplayDegrade)
       const events = snapshot.models.streamSimple(model, context, {
-        ...profileOptions(profile, reasoning, apiKey),
+        ...profileOptions(profile, model, reasoning, apiKey),
         ...options.temperature === undefined ? {} : { temperature: options.temperature },
         ...options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens },
         ...options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) },

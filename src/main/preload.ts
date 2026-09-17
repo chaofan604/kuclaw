@@ -76,6 +76,12 @@ const api: HarnessStudioApi = {
   workspace: {
     pick: () => ipcRenderer.invoke(IPC.workspacePick),
     pickFiles: (scope, sessionId) => ipcRenderer.invoke(IPC.workspacePickFile, scope, sessionId),
+    pasteImage: (scope, sessionId) =>
+      ipcRenderer.invoke(IPC.workspacePasteImage, scope, sessionId),
+    uploadImage: (scope, sessionId, image) =>
+      ipcRenderer.invoke(IPC.workspaceUploadImage, scope, sessionId, image),
+    attachmentPreview: attachmentId =>
+      ipcRenderer.invoke(IPC.workspaceAttachmentPreview, attachmentId),
     files: (sessionId, query) => ipcRenderer.invoke(IPC.workspaceFiles, sessionId, query),
     changes: (scope, sessionId) => ipcRenderer.invoke(IPC.workspaceChanges, scope, sessionId),
     diff: (scope, sessionId, path) => ipcRenderer.invoke(IPC.workspaceDiff, scope, sessionId, path),

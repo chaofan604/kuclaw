@@ -2,6 +2,8 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type {
+  ChatFileAttachment,
+  ChatInvocation,
   ModelConfiguration,
   ModelSelection,
   ComposerFileAttachment,
@@ -44,6 +46,7 @@ type IconName =
   | 'clock'
   | 'commit'
   | 'copy'
+  | 'cube'
   | 'edit'
   | 'file'
   | 'folder'
@@ -80,6 +83,7 @@ function Icon({ name }: { name: IconName }) {
     clock: <path d="M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />,
     commit: <path d="M3 12h5m8 0h5M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z" />,
     copy: <><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3" /></>,
+    cube: <><path d="m12 3 7 4-7 4-7-4 7-4Z" /><path d="m5 7 7 4v9l-7-4V7Zm14 0-7 4v9l7-4V7Z" /></>,
     edit: <><path d="m4 20 4.2-1 10.7-10.7a2 2 0 0 0-2.8-2.8L5.4 16.2 4 20Z" /><path d="m14.5 7 2.8 2.8" /></>,
     file: <path d="M7 3h7l4 4v14H7zM14 3v4h4" />,
     folder: <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />,
@@ -694,10 +698,41 @@ function AssistantMarkdown({ text }: { text: string }) {
   )
 }
 
-function UserMessageText({ text }: { text: string }) {
-  if (text === '') return null
+function invocationLabel(name: string): string {
+  return name.split(/[-_]+/u)
+    .filter(Boolean)
+    .map(part => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(' ')
+}
+
+function presentedUserMessage(
+  message: SessionMessage,
+  skillNames: ReadonlySet<string>,
+): { text: string; invocation?: ChatInvocation } {
+  if (message.invocation !== undefined) return { text: message.text, invocation: message.invocation }
+  const match = /^\/([a-z0-9_-]+)(?:\s+|$)/iu.exec(message.text)
+  const name = match?.[1]?.toLowerCase()
+  if (match === null || name === undefined) return { text: message.text }
+  const text = message.text.slice(match[0].length).trimStart()
+  if (name === 'goal' || name === 'plan') {
+    return { text, invocation: { kind: name, name, label: name === 'goal' ? '目标' : '计划' } }
+  }
+  if (skillNames.has(name)) {
+    return { text, invocation: { kind: 'skill', name, label: invocationLabel(name) } }
+  }
+  return { text: message.text }
+}
+
+function UserMessageText({ text, invocation }: { text: string; invocation?: ChatInvocation }) {
+  if (text === '' && invocation === undefined) return null
   return (
     <div className="user-message-text">
+      {invocation !== undefined && (
+        <span className={`sent-invocation-token ${invocation.kind}`} title={`/${invocation.name}`}>
+          <Icon name={invocation.kind === 'skill' ? 'cube' : invocation.kind === 'goal' ? 'goal' : invocation.kind === 'plan' ? 'plan' : 'terminal'} />
+          <span>{invocation.label}</span>
+        </span>
+      )}
       {splitMentionSegments(text).map((segment, index) => segment.kind === 'mention' ? (
         <span
           aria-label={`项目文件引用 ${segment.value}`}
@@ -712,17 +747,67 @@ function UserMessageText({ text }: { text: string }) {
   )
 }
 
-export function Message({ message }: { message: SessionMessage }) {
+const EMPTY_NAME_SET: ReadonlySet<string> = new Set()
+const IMAGE_ATTACHMENT_NAME = /\.(?:png|jpe?g|webp|gif)$/iu
+const attachmentPreviewCache = new Map<string, string>()
+
+function isImageAttachment(attachment: ChatFileAttachment): boolean {
+  return IMAGE_ATTACHMENT_NAME.test(attachment.name)
+}
+
+function SentImageAttachment({ attachment }: { attachment: ChatFileAttachment }) {
+  const [preview, setPreview] = useState(() => attachmentPreviewCache.get(attachment.id))
+  useEffect(() => {
+    if (preview !== undefined) return
+    let cancelled = false
+    const readPreview = window.harnessStudio?.workspace?.attachmentPreview
+    if (readPreview === undefined) return
+    void readPreview(attachment.id).then(value => {
+      if (cancelled || value === undefined) return
+      attachmentPreviewCache.set(attachment.id, value)
+      setPreview(value)
+    }).catch(() => undefined)
+    return () => { cancelled = true }
+  }, [attachment.id, preview])
+  return (
+    <div className={`sent-image-card ${preview === undefined ? 'loading' : ''}`} aria-label={`图片 ${attachment.name}`} title={attachment.name}>
+      {preview === undefined
+        ? <span><Icon name="file" /></span>
+        : <img src={preview} alt={attachment.name} />}
+    </div>
+  )
+}
+
+export function Message({ message, skillNames = EMPTY_NAME_SET }: {
+  message: SessionMessage
+  skillNames?: ReadonlySet<string>
+}) {
   if (message.role === 'user') {
     const attachments = message.attachments ?? []
-    const clipboardText = message.text || attachments.map(attachment => attachment.name).join('\n')
+    const imageAttachments = attachments.filter(isImageAttachment)
+    const fileAttachments = attachments.filter(attachment => !isImageAttachment(attachment))
+    const presentation = presentedUserMessage(message, skillNames)
+    const invocationText = presentation.invocation === undefined ? '' : `/${presentation.invocation.name}`
+    const clipboardText = [invocationText, presentation.text].filter(Boolean).join(' ')
+      || attachments.map(attachment => attachment.name).join('\n')
     if (clipboardText === '' && attachments.length === 0) return null
+    const showBubble = presentation.text !== ''
+      || presentation.invocation !== undefined
+      || fileAttachments.length > 0
     return (
       <article className="user-message">
-        <div className={`user-bubble${attachments.length > 0 ? ' with-attachments' : ''}${message.text === '' ? ' attachment-only' : ''}`}>
-          {attachments.length > 0 && (
+        {imageAttachments.length > 0 && (
+          <div className="sent-image-strip" aria-label="已发送图片">
+            {imageAttachments.map((attachment, index) => (
+              <SentImageAttachment attachment={attachment} key={`${attachment.id}-${String(index)}`} />
+            ))}
+          </div>
+        )}
+        {showBubble && (
+          <div className={`user-bubble${fileAttachments.length > 0 ? ' with-attachments' : ''}${presentation.text === '' ? ' attachment-only' : ''}${presentation.invocation === undefined ? '' : ` with-invocation ${presentation.invocation.kind}-invocation`}`}>
+          {fileAttachments.length > 0 && (
             <div aria-label="已发送附件" className="sent-attachments">
-              {attachments.map((attachment, index) => (
+              {fileAttachments.map((attachment, index) => (
                 <div
                   aria-label={`附件 ${attachment.name}`}
                   className="sent-attachment-card"
@@ -738,8 +823,12 @@ export function Message({ message }: { message: SessionMessage }) {
               ))}
             </div>
           )}
-          <UserMessageText text={message.text} />
-        </div>
+          <UserMessageText
+            text={presentation.text}
+            {...(presentation.invocation === undefined ? {} : { invocation: presentation.invocation })}
+          />
+          </div>
+        )}
         <div className="message-actions">
           <button aria-label="复制" onClick={() => void navigator.clipboard.writeText(clipboardText)}><Icon name="copy" /></button>
           <button aria-label="编辑"><Icon name="edit" /></button>
@@ -774,7 +863,11 @@ function finalAssistantForTurn(turn: ConversationTurn, active: boolean): Session
   return latest?.state === 'streaming' ? latest : undefined
 }
 
-export function ConversationTurnView({ turn, active }: { turn: ConversationTurn; active: boolean }) {
+export function ConversationTurnView({ turn, active, skillNames = EMPTY_NAME_SET }: {
+  turn: ConversationTurn
+  active: boolean
+  skillNames?: ReadonlySet<string>
+}) {
   const finalAssistant = finalAssistantForTurn(turn, active)
   const activityMessages = finalAssistant === undefined
     ? turn.assistants
@@ -790,7 +883,7 @@ export function ConversationTurnView({ turn, active }: { turn: ConversationTurn;
     ?? turn.user.createdAt
   return (
     <section className="conversation-turn">
-      <Message message={turn.user} />
+      <Message message={turn.user} skillNames={skillNames} />
       <div className="turn-timeline">
         {showActivity && (
           <ActivityCard
@@ -1158,6 +1251,21 @@ const COMPOSER_MODE_COPY: Record<ComposerMode, { label: string; placeholder: str
   },
 }
 
+const REASONING_EFFORT_LABELS: Record<string, string> = {
+  off: 'Off',
+  minimal: 'Minimal',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra High',
+  max: 'Max',
+  ultra: 'Ultra',
+}
+
+function reasoningEffortLabel(effort: { id: string; name: string }): string {
+  return REASONING_EFFORT_LABELS[effort.id.toLowerCase()] ?? effort.name
+}
+
 function isComposerMode(name: string): name is ComposerMode {
   return name === 'goal' || name === 'plan'
 }
@@ -1192,7 +1300,41 @@ type ComposerEntity =
     label: string
     detail: string
     attachment: ComposerFileAttachment
+    mediaType?: string
+    previewUrl?: string
   }
+
+const CLIPBOARD_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+const MAX_CLIPBOARD_IMAGE_BYTES = 25 * 1024 * 1024
+const MAX_CLIPBOARD_IMAGES = 8
+
+function clipboardImageExtension(mediaType: string): string {
+  if (mediaType === 'image/jpeg') return 'jpg'
+  if (mediaType === 'image/webp') return 'webp'
+  if (mediaType === 'image/gif') return 'gif'
+  return 'png'
+}
+
+function clipboardImageName(file: File, index: number): string {
+  const existing = file.name.trim()
+  if (existing !== '' && existing !== 'image.png') return existing
+  return `pasted-image-${String(Date.now())}-${String(index + 1)}.${clipboardImageExtension(file.type)}`
+}
+
+function releaseComposerPreviews(entities: readonly ComposerEntity[]): void {
+  for (const entity of entities) {
+    if (entity.kind === 'attachment' && entity.previewUrl !== undefined) {
+      URL.revokeObjectURL(entity.previewUrl)
+    }
+  }
+}
+
+function clipboardImageError(reason: unknown): string {
+  const detail = reason instanceof Error ? reason.message : String(reason)
+  if (detail.includes('25 MB')) return '单张图片不能超过 25 MB'
+  if (detail.includes('PNG、JPEG、WebP 和 GIF')) return '仅支持 PNG、JPEG、WebP 和 GIF 图片'
+  return '图片上传失败，请稍后重试。'
+}
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${String(bytes)} B`
@@ -1209,17 +1351,30 @@ function ComposerEntities({ entities, invocation, onRemoveEntity, onRemoveInvoca
   if (entities.length === 0 && invocation === undefined) return null
   return (
     <div className="composer-entities" aria-label="已添加的上下文">
-      {invocation !== undefined && (
+      {invocation?.kind === 'skill' && (
+        <div className="composer-invocation-token skill" title={`技能 /${invocation.name}`}>
+          <Icon name="cube" />
+          <span>{invocation.label}</span>
+          <button aria-label={`移除技能 ${invocation.label}`} onClick={onRemoveInvocation}>×</button>
+        </div>
+      )}
+      {invocation !== undefined && invocation.kind !== 'skill' && (
         <div className={`composer-entity invocation ${invocation.kind}`}>
           <span className="composer-entity-symbol">/</span>
           <span className="composer-entity-copy">
             <b>{invocation.label}</b>
-            <small>{invocation.kind === 'skill' ? '技能' : '命令'}</small>
+            <small>命令</small>
           </span>
-          <button aria-label={`移除${invocation.kind === 'skill' ? '技能' : '命令'} ${invocation.label}`} onClick={onRemoveInvocation}>×</button>
+          <button aria-label={`移除命令 ${invocation.label}`} onClick={onRemoveInvocation}>×</button>
         </div>
       )}
-      {entities.map(entity => (
+      {entities.map(entity => entity.kind === 'attachment' && entity.previewUrl !== undefined ? (
+        <div className="composer-image-entity" key={entity.id} title={entity.detail}>
+          <img src={entity.previewUrl} alt={entity.label} />
+          <span>{entity.label}</span>
+          <button aria-label={`移除图片 ${entity.label}`} onClick={() => onRemoveEntity(entity.id)}>×</button>
+        </div>
+      ) : (
         <div className={`composer-entity ${entity.kind}`} key={entity.id} title={entity.detail}>
           <span className="composer-entity-symbol">
             {entity.kind === 'reference' ? '@' : <Icon name="file" />}
@@ -1494,11 +1649,13 @@ export function CodexApp() {
   const [contextStatus, setContextStatus] = useState<ContextStatus>()
   const [modelConfiguration, setModelConfiguration] = useState<ModelConfiguration>()
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
+  const [effortMenuOpen, setEffortMenuOpen] = useState(false)
   const [modelActionPending, setModelActionPending] = useState(false)
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false)
   const [permissionActionPending, setPermissionActionPending] = useState(false)
   const [prompt, setPrompt] = useState('')
   const [composerEntities, setComposerEntities] = useState<ComposerEntity[]>([])
+  const composerEntitiesRef = useRef<ComposerEntity[]>([])
   const [composerInvocation, setComposerInvocation] = useState<ComposerInvocation>()
   const [selectedComposerMode, setSelectedComposerMode] = useState<ComposerMode>()
   const [pendingModeMessage, setPendingModeMessage] = useState<{
@@ -1513,6 +1670,7 @@ export function CodexApp() {
   >(undefined)
   const [slashItems, setSlashItems] = useState<ComposerMenuItem[]>([])
   const [slashLoading, setSlashLoading] = useState(false)
+  const [knownSkillNames, setKnownSkillNames] = useState<ReadonlySet<string>>(EMPTY_NAME_SET)
   const [fileItems, setFileItems] = useState<MentionCandidate[]>([])
   const [filesLoading, setFilesLoading] = useState(false)
   const [pickingFiles, setPickingFiles] = useState(false)
@@ -1544,7 +1702,9 @@ export function CodexApp() {
   const harnessCommandNames = useRef<Set<string>>(new Set(['compact']))
   const durablePendingModeMessage = pendingModeMessage !== undefined
     && pendingModeMessage.sessionId === current?.id
-    && current.messages.some(message => message.role === 'user' && message.text === pendingModeMessage.expectedText)
+    && current.messages.some(message => message.role === 'user'
+      && message.text === pendingModeMessage.expectedText
+      && message.invocation?.kind === pendingModeMessage.mode)
   const conversationSession = current === undefined || pendingModeMessage === undefined
     || pendingModeMessage.sessionId !== current.id || durablePendingModeMessage
     ? current
@@ -1629,23 +1789,28 @@ export function CodexApp() {
   }), [])
 
   useEffect(() => {
-    if (!modeMenuOpen && !modelMenuOpen && !permissionMenuOpen) return
+    if (!modeMenuOpen && !modelMenuOpen && !effortMenuOpen && !permissionMenuOpen) return
     const closeOutsideMenus = (event: PointerEvent): void => {
       if (!(event.target instanceof Element)) return
       if (event.target.closest('.mode-switcher') === null) setModeMenuOpen(false)
       if (event.target.closest('.model-picker') === null) setModelMenuOpen(false)
+      if (event.target.closest('.effort-picker') === null) setEffortMenuOpen(false)
       if (event.target.closest('.permission-picker') === null) setPermissionMenuOpen(false)
     }
     document.addEventListener('pointerdown', closeOutsideMenus)
     return () => document.removeEventListener('pointerdown', closeOutsideMenus)
-  }, [modeMenuOpen, modelMenuOpen, permissionMenuOpen])
+  }, [modeMenuOpen, modelMenuOpen, effortMenuOpen, permissionMenuOpen])
 
   useLayoutEffect(() => {
     setModelMenuOpen(false)
+    setEffortMenuOpen(false)
     setPermissionMenuOpen(false)
     setComposerMenu(undefined)
     setPrompt('')
-    setComposerEntities([])
+    setComposerEntities(entities => {
+      releaseComposerPreviews(entities)
+      return []
+    })
     setComposerInvocation(undefined)
     setSelectedComposerMode(undefined)
     setPendingModeMessage(undefined)
@@ -1658,9 +1823,35 @@ export function CodexApp() {
   }, [current?.id])
 
   useEffect(() => {
+    composerEntitiesRef.current = composerEntities
+  }, [composerEntities])
+
+  useEffect(() => () => releaseComposerPreviews(composerEntitiesRef.current), [])
+
+  useEffect(() => {
     if (settingsOpen) return
     void window.harnessStudio.models.getConfiguration().then(setModelConfiguration)
   }, [settingsOpen])
+
+  useEffect(() => {
+    if (current === undefined) {
+      setKnownSkillNames(EMPTY_NAME_SET)
+      return
+    }
+    let cancelled = false
+    const commands = window.harnessStudio.sessions.commands?.(current.id) ?? Promise.resolve([])
+    const skills = window.harnessStudio.skills?.list?.(current.id) ?? Promise.resolve([])
+    void Promise.allSettled([commands, skills]).then(([commandResult, skillResult]) => {
+      if (cancelled) return
+      if (commandResult.status === 'fulfilled') {
+        harnessCommandNames.current = new Set(commandResult.value.map(command => command.name.toLowerCase()))
+      }
+      setKnownSkillNames(skillResult.status === 'fulfilled'
+        ? new Set(skillResult.value.map(skill => skill.name.toLowerCase()))
+        : EMPTY_NAME_SET)
+    })
+    return () => { cancelled = true }
+  }, [current?.id])
 
   useLayoutEffect(() => {
     const viewport = conversationViewport.current
@@ -1933,15 +2124,18 @@ export function CodexApp() {
           setPendingModeMessage({
             sessionId: current.id,
             mode: normalizedCommand,
-            expectedText: normalizedCommand === 'goal'
-              ? `/goal${submittedText === '' ? '' : ` ${submittedText}`}`
-              : submittedText,
+            expectedText: submittedText,
             message: {
               id: messageId,
               role: 'user',
               text: submittedText,
               createdAt: Date.now(),
               state: 'complete',
+              invocation: {
+                kind: normalizedCommand,
+                name: normalizedCommand,
+                label: COMPOSER_MODE_COPY[normalizedCommand].label,
+              },
               ...(attachments.length === 0 ? {} : {
                 attachments: attachments.map(attachment => ({
                   id: attachment.receiptId,
@@ -1968,6 +2162,7 @@ export function CodexApp() {
           attachments,
         })
       }
+      releaseComposerPreviews(previousEntities)
     } catch (reason) {
       console.error('Composer submission failed:', reason)
       setPrompt(previousPrompt)
@@ -1990,6 +2185,7 @@ export function CodexApp() {
     if (current === undefined || modelActionPending) return
     setError(undefined)
     setModelMenuOpen(false)
+    setEffortMenuOpen(false)
     setModelActionPending(true)
     try {
       const selected = await window.harnessStudio.sessions.selectModel(sessionScope, current.id, selection)
@@ -1999,6 +2195,15 @@ export function CodexApp() {
     } finally {
       setModelActionPending(false)
     }
+  }
+
+  function selectReasoningEffort(reasoningEffort: string) {
+    if (activeSelection === undefined) return
+    void selectModel({
+      provider: activeSelection.provider,
+      model: activeSelection.model,
+      reasoningEffort,
+    })
   }
 
   async function selectPermission(preset: string) {
@@ -2268,7 +2473,9 @@ export function CodexApp() {
       setComposerInvocation({
         kind: item.invocation.kind,
         name: item.invocation.name,
-        label: item.title.replace(/^\//u, ''),
+        label: item.invocation.kind === 'skill'
+          ? invocationLabel(item.invocation.name)
+          : item.displayTitle ?? item.title.replace(/^\//u, ''),
       })
     }
     setComposerMenu(undefined)
@@ -2351,6 +2558,85 @@ export function CodexApp() {
     }
   }
 
+  async function pasteClipboardImages(files: File[]) {
+    if (current === undefined || pickingFiles) return
+    if (files.length > MAX_CLIPBOARD_IMAGES) {
+      setError(`一次最多粘贴 ${String(MAX_CLIPBOARD_IMAGES)} 张图片`)
+      return
+    }
+    const sessionId = current.id
+    const staged: ComposerEntity[] = []
+    setComposerMenu(undefined)
+    setError(undefined)
+    setPickingFiles(true)
+    try {
+      if (files.length <= 1) {
+        const nativeImage = await window.harnessStudio.workspace.pasteImage(sessionScope, sessionId)
+        if (nativeImage !== undefined) {
+          staged.push({
+            id: crypto.randomUUID(),
+            kind: 'attachment',
+            label: nativeImage.attachment.name,
+            detail: `图片 · PNG · ${formatFileSize(nativeImage.attachment.bytes)}`,
+            attachment: nativeImage.attachment,
+            mediaType: nativeImage.mediaType,
+            previewUrl: nativeImage.previewDataUrl,
+          })
+        }
+      }
+      if (staged.length === 0 && files.length === 0) {
+        setError('剪贴板中没有可用图片')
+        return
+      }
+      const invalid = files.find(file => !CLIPBOARD_IMAGE_TYPES.has(file.type))
+      if (staged.length === 0 && invalid !== undefined) {
+        setError('仅支持 PNG、JPEG、WebP 和 GIF 图片')
+        return
+      }
+      const oversized = files.find(file => file.size > MAX_CLIPBOARD_IMAGE_BYTES)
+      if (staged.length === 0 && oversized !== undefined) {
+        setError(`图片 ${oversized.name || '未命名图片'} 超过 25 MB`)
+        return
+      }
+      for (const [index, file] of files.entries()) {
+        if (staged.length > 0) break
+        const name = clipboardImageName(file, index)
+        const previewUrl = URL.createObjectURL(file)
+        try {
+          const attachment = await window.harnessStudio.workspace.uploadImage(sessionScope, sessionId, {
+            name,
+            mediaType: file.type,
+            bytes: new Uint8Array(await file.arrayBuffer()),
+          })
+          staged.push({
+            id: crypto.randomUUID(),
+            kind: 'attachment',
+            label: attachment.name,
+            detail: `图片 · ${file.type.slice('image/'.length).toUpperCase()} · ${formatFileSize(attachment.bytes)}`,
+            attachment,
+            mediaType: file.type,
+            previewUrl,
+          })
+        } catch (error) {
+          URL.revokeObjectURL(previewUrl)
+          throw error
+        }
+      }
+      if (currentSessionId.current !== sessionId) {
+        releaseComposerPreviews(staged)
+        return
+      }
+      setComposerEntities(entities => [...entities, ...staged])
+      requestAnimationFrame(() => textarea.current?.focus())
+    } catch (reason) {
+      releaseComposerPreviews(staged)
+      console.error('Clipboard image upload failed:', reason)
+      setError(clipboardImageError(reason))
+    } finally {
+      setPickingFiles(false)
+    }
+  }
+
   const activeSelection = current?.modelSelection ?? modelConfiguration?.defaultSelection
   const addedProviderIds = new Set(modelConfiguration?.profiles.map(profile => profile.id) ?? [])
   const addedModelGroups = modelConfiguration?.groups.filter(group => addedProviderIds.has(group.id)) ?? []
@@ -2360,6 +2646,15 @@ export function CodexApp() {
   })))
   const activeModel = addedModels
     .find(item => item.provider === activeSelection?.provider && item.model.id === activeSelection.model)?.model
+  const activeReasoningEfforts = activeModel?.reasoningEfforts ?? []
+  const activeReasoningEffortId = activeSelection?.reasoningEffort ?? activeModel?.defaultReasoningEffort
+  const activeReasoningEffort = activeReasoningEfforts
+    .find(effort => effort.id === activeReasoningEffortId)
+  const activeReasoningEffortLabel = activeReasoningEffort !== undefined
+    ? reasoningEffortLabel(activeReasoningEffort)
+    : activeReasoningEffortId === undefined
+      ? '默认'
+      : REASONING_EFFORT_LABELS[activeReasoningEffortId.toLowerCase()] ?? activeReasoningEffortId
   const activePermission = current?.permissionSelection?.options
     .find(option => option.value === current.permissionSelection?.currentValue)
   const pendingInteraction = pendingInteractions.find(item => item.sessionId === current?.id)
@@ -2495,7 +2790,7 @@ export function CodexApp() {
               <>
                 {conversationTurns.map((turn, index) => {
                   const active = current.status === 'running' && index === conversationTurns.length - 1
-                  return <ConversationTurnView turn={turn} active={active} key={turn.id} />
+                  return <ConversationTurnView turn={turn} active={active} skillNames={knownSkillNames} key={turn.id} />
                 })}
                 {current.status === 'running' && current.jobs.some(job => job.status === 'running' || job.status === 'stopping') && (
                   <div className="activity-list">
@@ -2562,7 +2857,11 @@ export function CodexApp() {
             <ComposerEntities
               entities={composerEntities}
               invocation={composerMode === undefined ? composerInvocation : undefined}
-              onRemoveEntity={id => setComposerEntities(entities => entities.filter(entity => entity.id !== id))}
+              onRemoveEntity={id => setComposerEntities(entities => {
+                const removed = entities.find(entity => entity.id === id)
+                if (removed !== undefined) releaseComposerPreviews([removed])
+                return entities.filter(entity => entity.id !== id)
+              })}
               onRemoveInvocation={() => setComposerInvocation(undefined)}
             />
             <div className="composer-input-row">
@@ -2619,6 +2918,19 @@ export function CodexApp() {
                   event.preventDefault()
                   void send()
                 }
+              }}
+              onPaste={event => {
+                const images = Array.from(event.clipboardData.items).flatMap(item => {
+                  if (item.kind !== 'file' || !item.type.startsWith('image/')) return []
+                  const file = item.getAsFile()
+                  return file === null ? [] : [file]
+                })
+                const text = event.clipboardData.getData('text/plain')
+                const mayContainNativeImage = text === ''
+                  || Array.from(event.clipboardData.types).some(type => type === 'Files' || type.startsWith('image/'))
+                if (images.length === 0 && !mayContainNativeImage) return
+                event.preventDefault()
+                void pasteClipboardImages(images)
               }}
               />
             </div>
@@ -2694,7 +3006,10 @@ export function CodexApp() {
                     aria-haspopup="menu"
                     aria-expanded={modelMenuOpen}
                     aria-busy={modelActionPending}
-                    onClick={() => setModelMenuOpen(value => !value)}
+                    onClick={() => {
+                      setEffortMenuOpen(false)
+                      setModelMenuOpen(value => !value)
+                    }}
                   >
                     {activeModel?.name ?? activeSelection?.model ?? (runtimeMode === 'harness' ? '选择模型' : 'Simulation')}
                     <Icon name="chevron" />
@@ -2708,6 +3023,7 @@ export function CodexApp() {
                             type="button"
                             className={activeSelection?.provider === provider && activeSelection.model === model.id ? 'active' : ''}
                             key={`${provider}:${model.id}`}
+                            aria-label={model.name}
                             aria-pressed={activeSelection?.provider === provider && activeSelection.model === model.id}
                             onClick={() => void selectModel({
                               provider,
@@ -2717,14 +3033,59 @@ export function CodexApp() {
                                 : { reasoningEffort: model.defaultReasoningEffort }),
                             })}
                           >
-                            {model.name}
+                            <span>{model.name}</span>
+                            <small>{model.reasoningEfforts.length === 0
+                              ? 'Default'
+                              : `${String(model.reasoningEfforts.length)} levels`}</small>
                           </button>
                         ))}
                       </div>
                     </div>
                   )}
                 </div>
-                <span className="effort">高</span>
+                {activeReasoningEfforts.length > 0 ? (
+                  <div className="effort-picker">
+                    <button
+                      type="button"
+                      className="effort"
+                      disabled={current === undefined || modelActionPending}
+                      aria-haspopup="menu"
+                      aria-expanded={effortMenuOpen}
+                      title="推理强度"
+                      onClick={() => {
+                        setModelMenuOpen(false)
+                        setEffortMenuOpen(value => !value)
+                      }}
+                    >
+                      <span>{activeReasoningEffortLabel}</span>
+                      <Icon name="chevron" />
+                    </button>
+                    {effortMenuOpen && (
+                      <div className="effort-menu" role="menu" aria-label="推理强度">
+                        <div className="effort-menu-heading">
+                          <span>Reasoning effort</span>
+                          <small>{String(activeReasoningEfforts.length)} levels</small>
+                        </div>
+                        {activeReasoningEfforts.map(effort => (
+                          <button
+                            type="button"
+                            className={effort.id === activeReasoningEffortId ? 'active' : ''}
+                            key={effort.id}
+                            aria-label={reasoningEffortLabel(effort)}
+                            aria-pressed={effort.id === activeReasoningEffortId}
+                            title={effort.description}
+                            onClick={() => selectReasoningEffort(effort.id)}
+                          >
+                            <span>{reasoningEffortLabel(effort)}</span>
+                            {effort.id === activeReasoningEffortId && <Icon name="check" />}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <span className="effort unavailable" title="该模型未声明可选推理强度">默认</span>
+                )}
                 {current?.status === 'running' ? (
                   <button className="send-button" aria-label="停止" onClick={() => void cancel()}><Icon name="stop" /></button>
                 ) : (

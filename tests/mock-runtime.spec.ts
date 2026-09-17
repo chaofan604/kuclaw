@@ -11,6 +11,20 @@ async function runtime() {
 }
 
 describe('MockAgentRuntime', () => {
+  it('stages clipboard image bytes as a composer attachment', async () => {
+    const agent = await runtime()
+    const session = await agent.createSession('/tmp/project')
+    await expect(agent.uploadImage(session.id, {
+      name: 'pasted.png',
+      mediaType: 'image/png',
+      bytes: new Uint8Array([1, 2, 3, 4]),
+    })).resolves.toMatchObject({
+      name: 'pasted.png',
+      bytes: 4,
+    })
+    await agent.dispose()
+  })
+
   it('streams a complete session and persists it for another store instance', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'harness-studio-persist-'))
     const file = join(directory, 'sessions.json')

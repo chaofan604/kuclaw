@@ -1,20 +1,25 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   Menu,
+  nativeImage,
   session as electronSession,
   shell,
   type MenuItemConstructorOptions,
 } from 'electron'
-import { isAbsolute, join } from 'node:path'
+import { basename, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { appendFileSync, mkdirSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import {
   IPC,
   type ApprovalDecision,
   type ComposerCommandSubmission,
+  type ComposerImageUpload,
+  type ComposerPastedImage,
   type ComposerSubmission,
   type ModelConfigurationUpdate,
   type ModelDiscoveryRequest,
@@ -57,6 +62,30 @@ let runtime: StudioRuntime | undefined
 let quitting = false
 let shutdown: Promise<void> | undefined
 let memoryStore: MemoryStore | undefined
+
+const CLIPBOARD_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+const MAX_CLIPBOARD_IMAGE_BYTES = 25 * 1024 * 1024
+const ATTACHMENT_ID_PATTERN = /^sha256:([a-f0-9]{64})$/u
+
+function validatedClipboardImage(image: ComposerImageUpload): ComposerImageUpload {
+  if (typeof image !== 'object' || image === null || !(image.bytes instanceof Uint8Array)) {
+    throw new Error('剪贴板图片数据无效')
+  }
+  if (!CLIPBOARD_IMAGE_TYPES.has(image.mediaType)) {
+    throw new Error('仅支持 PNG、JPEG、WebP 和 GIF 图片')
+  }
+  if (image.bytes.byteLength === 0) throw new Error('剪贴板图片为空')
+  if (image.bytes.byteLength > MAX_CLIPBOARD_IMAGE_BYTES) {
+    throw new Error('单张图片不能超过 25 MB')
+  }
+  const name = basename(image.name.trim()).slice(0, 180)
+  if (name === '') throw new Error('剪贴板图片缺少文件名')
+  return {
+    name,
+    mediaType: image.mediaType,
+    bytes: new Uint8Array(image.bytes),
+  }
+}
 
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
@@ -359,6 +388,87 @@ function registerIpc(agentRuntime: StudioRuntime, mcpManager: McpManager, memori
     } catch (error) {
       console.error('Harness Studio failed to add selected files:', error)
       throw new Error('文件添加失败，请确认文件仍可访问，然后重试。')
+    }
+  })
+  ipcMain.handle(IPC.workspaceUploadImage, async (
+    _event,
+    scope: SessionScope,
+    sessionId: string,
+    input: ComposerImageUpload,
+  ) => {
+    try {
+      return await agentRuntime.uploadImage(scope, sessionId, validatedClipboardImage(input))
+    } catch (error) {
+      console.error('Harness Studio failed to add a clipboard image:', error)
+      throw new Error(error instanceof Error ? error.message : '剪贴板图片添加失败')
+    }
+  })
+  ipcMain.handle(IPC.workspacePasteImage, async (
+    _event,
+    scope: SessionScope,
+    sessionId: string,
+  ): Promise<ComposerPastedImage | undefined> => {
+    const items = await clipboard.read()
+    const imageEntry = items.flatMap(item => item.types
+      .filter(type => type.startsWith('image/'))
+      .map(type => ({ item, type })))[0]
+    if (imageEntry === undefined) return undefined
+    const value = await imageEntry.item.getType(imageEntry.type)
+    if (!(value instanceof Blob)) return undefined
+    const clipboardImage = nativeImage.createFromBuffer(Buffer.from(await value.arrayBuffer()))
+    if (clipboardImage.isEmpty()) return undefined
+    try {
+      const original = clipboardImage.toPNG()
+      const attachment = await agentRuntime.uploadImage(scope, sessionId, validatedClipboardImage({
+        name: `pasted-image-${String(Date.now())}.png`,
+        mediaType: 'image/png',
+        bytes: original,
+      }))
+      const size = clipboardImage.getSize()
+      const preview = size.width > 360
+        ? clipboardImage.resize({ width: 360, quality: 'good' })
+        : clipboardImage
+      return {
+        attachment,
+        mediaType: 'image/png',
+        previewDataUrl: preview.toDataURL(),
+      }
+    } catch (error) {
+      console.error('Harness Studio failed to paste the native clipboard image:', error)
+      throw new Error(error instanceof Error ? error.message : '剪贴板图片添加失败')
+    }
+  })
+  ipcMain.handle(IPC.workspaceAttachmentPreview, async (_event, attachmentId: string) => {
+    const match = ATTACHMENT_ID_PATTERN.exec(attachmentId)
+    if (match === null) return undefined
+    const digest = match[1]!
+    const runtimeFolder = app.isPackaged || process.env.HARNESS_STUDIO_RUNTIME === 'harness'
+      ? app.isPackaged ? 'harness' : 'harness-development'
+      : 'harness-development'
+    const path = join(
+      app.getPath('userData'),
+      runtimeFolder,
+      'home',
+      'attachments',
+      'v1',
+      'file-objects',
+      digest.slice(0, 2),
+      digest,
+    )
+    try {
+      const image = nativeImage.createFromBuffer(await readFile(path))
+      if (image.isEmpty()) return undefined
+      const size = image.getSize()
+      const preview = Math.max(size.width, size.height) > 480
+        ? size.width >= size.height
+          ? image.resize({ width: 480, quality: 'good' })
+          : image.resize({ height: 480, quality: 'good' })
+        : image
+      return preview.toDataURL()
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+      console.error(`Harness Studio failed to read attachment preview ${attachmentId}:`, error)
+      return undefined
     }
   })
   ipcMain.handle(IPC.workspaceFiles, (_event, sessionId: string, query: string) =>

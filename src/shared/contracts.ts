@@ -12,6 +12,12 @@ export interface ChatFileAttachment {
   bytes: number
 }
 
+export interface ChatInvocation {
+  kind: 'skill' | 'goal' | 'plan' | 'command'
+  name: string
+  label: string
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
@@ -23,6 +29,8 @@ export interface ChatMessage {
   presentation?: 'activity' | 'answer'
   /** Generic files attached to this user message. */
   attachments?: ChatFileAttachment[]
+  /** Structured slash invocation rendered separately from user-authored text. */
+  invocation?: ChatInvocation
 }
 
 /** One model reasoning passage shown in its original position in the turn. */
@@ -259,6 +267,23 @@ export interface ComposerFileAttachment {
   name: string
   /** Exact uploaded byte length. */
   bytes: number
+}
+
+/** One clipboard image transferred from the sandboxed Renderer for staging. */
+export interface ComposerImageUpload {
+  /** Suggested filename; the Harness attachment store performs final sanitization. */
+  name: string
+  /** Browser-reported image MIME type. */
+  mediaType: string
+  /** Exact image bytes copied through Electron structured clone. */
+  bytes: Uint8Array
+}
+
+/** A native clipboard image staged by the Electron main process. */
+export interface ComposerPastedImage {
+  attachment: ComposerFileAttachment
+  mediaType: string
+  previewDataUrl: string
 }
 
 /** Structured composer value submitted by the Renderer. */
@@ -587,6 +612,9 @@ export interface HarnessStudioApi {
   workspace: {
     pick(): Promise<string | undefined>
     pickFiles(scope: SessionScope, sessionId: string): Promise<ComposerFileAttachment[]>
+    pasteImage(scope: SessionScope, sessionId: string): Promise<ComposerPastedImage | undefined>
+    uploadImage(scope: SessionScope, sessionId: string, image: ComposerImageUpload): Promise<ComposerFileAttachment>
+    attachmentPreview(attachmentId: string): Promise<string | undefined>
     files(sessionId: string, query: string): Promise<FileCandidate[]>
     changes(scope: SessionScope, sessionId: string): Promise<WorkspaceChanges>
     diff(scope: SessionScope, sessionId: string, path: string): Promise<WorkspaceFileDiff>
@@ -644,6 +672,9 @@ export const IPC = {
   scheduledTasksEvent: 'harness-studio:scheduled-tasks:event',
   workspacePick: 'harness-studio:workspace:pick',
   workspacePickFile: 'harness-studio:workspace:pick-file',
+  workspacePasteImage: 'harness-studio:workspace:paste-image',
+  workspaceUploadImage: 'harness-studio:workspace:upload-image',
+  workspaceAttachmentPreview: 'harness-studio:workspace:attachment-preview',
   workspaceFiles: 'harness-studio:workspace:files',
   workspaceChanges: 'harness-studio:workspace:changes',
   workspaceDiff: 'harness-studio:workspace:diff',

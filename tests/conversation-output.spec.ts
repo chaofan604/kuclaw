@@ -2,7 +2,7 @@
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { createElement } from 'react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SessionRecord } from '../src/shared/contracts.js'
 import { ActivityCard, buildConversationTurns, ConversationTurnView, Message, ReasoningPassage, summarizeReasoning, ToolStep } from '../src/renderer/CodexApp.js'
 import { projectMessages, projectReasoning } from '../src/main/runtime/harness-runtime.js'
@@ -49,6 +49,60 @@ describe('conversation output', () => {
     expect(turns[0]?.reasoning.map(passage => passage.id)).toEqual(['think-1', 'think-2'])
     expect(turns[0]?.assistants.map(message => message.id)).toEqual(['assistant-1'])
     expect(turns[1]?.assistants.map(message => message.id)).toEqual(['assistant-2'])
+  })
+
+  it.each([
+    ['goal', '目标'],
+    ['plan', '计划'],
+  ] as const)('projects /%s as a structured mode label instead of raw slash text', (name, label) => {
+    const commandEvent = {
+      type: 'command/run' as const,
+      seq: 1,
+      time: 10,
+      data: { name, commandId: `command-${name}`, args: '完成发布准备', source: { kind: 'user' } },
+    }
+    const messages = projectMessages(name === 'goal' ? [commandEvent] : [
+      commandEvent,
+      {
+        type: 'user/message',
+        seq: 2,
+        time: 11,
+        data: {
+          id: 'plan-message',
+          content: [{ type: 'text', text: '完成发布准备' }],
+          source: { kind: 'user' },
+        },
+      },
+    ])
+
+    expect(messages).toEqual([expect.objectContaining({
+      text: '完成发布准备',
+      invocation: { kind: name, name, label },
+    })])
+    const view = render(createElement(Message, { message: messages[0]! }))
+    expect(screen.getByText(label)).toBeTruthy()
+    expect(screen.queryByText(new RegExp(`/${name}`, 'u'))).toBeNull()
+    expect(view.container.querySelector(`.user-bubble.${name}-invocation`)).toBeTruthy()
+    expect(view.container.querySelector(`.sent-invocation-token.${name} svg`)).toBeTruthy()
+  })
+
+  it('renders a selected Skill as a Codex-style blue invocation in the sent message', () => {
+    const view = render(createElement(Message, {
+      message: {
+        id: 'skill-message',
+        role: 'user',
+        text: '/cloud-run-basics deploy the service',
+        createdAt: 1,
+        state: 'complete',
+      },
+      skillNames: new Set(['cloud-run-basics']),
+    }))
+
+    expect(screen.getByText('Cloud Run Basics')).toBeTruthy()
+    expect(screen.getByText('deploy the service')).toBeTruthy()
+    expect(screen.queryByText('/cloud-run-basics')).toBeNull()
+    expect(view.container.querySelector('.user-bubble.skill-invocation')).toBeTruthy()
+    expect(view.container.querySelector('.sent-invocation-token.skill svg')).toBeTruthy()
   })
 
   it('shows completed activity in sequence and keeps the final answer after it', () => {
@@ -169,6 +223,35 @@ describe('conversation output', () => {
     expect(screen.getByLabelText('附件 brief.pdf')).toBeTruthy()
     expect(screen.getByText('电脑文件 · 1.5 KB')).toBeTruthy()
     expect(screen.getByLabelText('项目文件引用 @src/main.ts')).toBeTruthy()
+  })
+
+  it('restores a sent image as a native thumbnail above the text bubble', async () => {
+    const attachmentPreview = vi.fn().mockResolvedValue('data:image/png;base64,cHJldmlldw==')
+    Object.defineProperty(window, 'harnessStudio', {
+      configurable: true,
+      value: { workspace: { attachmentPreview } },
+    })
+    const view = render(createElement(Message, {
+      message: {
+        id: 'user-with-image',
+        role: 'user',
+        text: '这是啥图片',
+        createdAt: 1,
+        state: 'complete',
+        attachments: [{
+          id: `sha256:${'a'.repeat(64)}`,
+          name: 'pasted-image.png',
+          bytes: 53_000,
+        }],
+      },
+    }))
+
+    const image = await screen.findByRole('img', { name: 'pasted-image.png' })
+    expect(image.getAttribute('src')).toBe('data:image/png;base64,cHJldmlldw==')
+    expect(attachmentPreview).toHaveBeenCalledWith(`sha256:${'a'.repeat(64)}`)
+    expect(screen.getByText('这是啥图片')).toBeTruthy()
+    expect(view.container.querySelector('.sent-image-strip')).toBeTruthy()
+    expect(view.container.querySelector('.sent-attachment-card')).toBeNull()
   })
 
   it('keeps a file-only user message visible', () => {

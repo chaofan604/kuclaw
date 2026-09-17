@@ -193,10 +193,12 @@ async function prepareHarness() {
   const scheduledTasksTarget = join(harnessRoot, 'node_modules', '@deepseek-ai', 'dsh-scheduled-tasks')
   const scheduledControllerTarget = join(harnessRoot, 'node_modules', '@deepseek-ai', 'dsh-api-scheduled-task-controller')
   const webFetchTarget = join(harnessRoot, 'node_modules', '@deepseek-ai', 'dsh-web-fetch-http')
+  const llmPiAiTarget = join(harnessRoot, 'node_modules', '@deepseek-ai', 'dsh-llm-pi-ai')
   await Promise.all([
     mkdir(join(scheduledTasksTarget, 'lib'), { recursive: true }),
     mkdir(join(scheduledControllerTarget, 'lib'), { recursive: true }),
     mkdir(join(webFetchTarget, 'lib'), { recursive: true }),
+    mkdir(join(llmPiAiTarget, 'lib'), { recursive: true }),
   ])
   await Promise.all([
     copyFile(join(upstreamRoot, 'apps', 'desktop-host', 'package.json'), join(harnessRoot, 'package.json')),
@@ -230,6 +232,15 @@ async function prepareHarness() {
     cp(
       join(upstreamRoot, 'packages', 'web', 'web-fetch-http', 'lib'),
       join(webFetchTarget, 'lib'),
+      { recursive: true, dereference: true },
+    ),
+    copyFile(
+      join(upstreamRoot, 'packages', 'llm', 'llm-pi-ai', 'package.json'),
+      join(llmPiAiTarget, 'package.json'),
+    ),
+    cp(
+      join(upstreamRoot, 'packages', 'llm', 'llm-pi-ai', 'lib'),
+      join(llmPiAiTarget, 'lib'),
       { recursive: true, dereference: true },
     ),
   ])

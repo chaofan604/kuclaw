@@ -27,6 +27,7 @@ import type {
   CommandSummary,
   ComposerCommandSubmission,
   ComposerFileAttachment,
+  ComposerImageUpload,
   ComposerSubmission,
 } from '../../shared/contracts.js'
 import type { AgentRuntime } from './runtime.js'
@@ -108,6 +109,14 @@ export class StudioRuntime {
 
   uploadFile(scope: SessionScope, sessionId: string, path: string): Promise<ComposerFileAttachment> {
     return this.runtime(scope).uploadFile(sessionId, path)
+  }
+
+  uploadImage(
+    scope: SessionScope,
+    sessionId: string,
+    image: ComposerImageUpload,
+  ): Promise<ComposerFileAttachment> {
+    return this.runtime(scope).uploadImage(sessionId, image)
   }
 
   listWorkspaceFiles(sessionId: string, query: string): Promise<FileCandidate[]> {

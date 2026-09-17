@@ -64,6 +64,8 @@ describe.skipIf(!hostAvailable)('HarnessHostProcess', () => {
       authorization?: string
       apiKey?: string
       model?: string
+      reasoning?: Record<string, unknown>
+      include?: unknown
       tools?: string[]
       requestedWebFetch?: boolean
       includedWebFetchResult?: boolean
@@ -91,6 +93,8 @@ describe.skipIf(!hostAvailable)('HarnessHostProcess', () => {
           max_tokens?: number
           model?: string
           messages?: unknown[]
+          reasoning?: Record<string, unknown>
+          include?: unknown
           tools?: Array<{ name?: string; function?: { name?: string } }>
         }
         const serializedMessages = JSON.stringify(parsed.messages ?? [])
@@ -101,6 +105,8 @@ describe.skipIf(!hostAvailable)('HarnessHostProcess', () => {
           ...(typeof request.headers.authorization === 'string' ? { authorization: request.headers.authorization } : {}),
           ...(typeof request.headers['x-api-key'] === 'string' ? { apiKey: request.headers['x-api-key'] } : {}),
           ...(typeof parsed.model === 'string' ? { model: parsed.model } : {}),
+          ...(parsed.reasoning === undefined ? {} : { reasoning: parsed.reasoning }),
+          ...(parsed.include === undefined ? {} : { include: parsed.include }),
           ...(parsed.tools === undefined ? {} : {
             tools: parsed.tools.flatMap(tool => {
               const name = tool.name ?? tool.function?.name
@@ -309,8 +315,8 @@ export function apply(ctx) {
         baseURL: `http://127.0.0.1:${String(providerAddress.port)}`,
         apiKey: 'keyless-harness-studio-test',
         models: [{
-          id: 'test-model',
-          name: 'Test Model',
+          id: 'glm-5.3-flash',
+          name: 'GLM 5.3 Flash',
           contextWindow: 262_144,
           maxTokens: 32_768,
         }],
@@ -321,24 +327,54 @@ export function apply(ctx) {
       protocol: 'openai-completions',
       credentialConfigured: true,
       credentialWritable: true,
-      models: [{ id: 'test-model' }],
+      models: [{ id: 'glm-5.3-flash' }],
     }])
     const configuredSettings = await client.call<{
       namespaces: Array<{ ns: string; value: unknown }>
     }>('settings/describe', {})
     expect(configuredSettings.namespaces.find(section => section.ns === 'llm-pi-ai')?.value).toMatchObject({
-      providers: { 'test-gateway': { streamIdleTimeoutMs: 30_000 } },
+      providers: {
+        'test-gateway': {
+          streamIdleTimeoutMs: 30_000,
+          reasoning: 'high',
+          models: [{
+            id: 'glm-5.3-flash',
+            reasoningEfforts: { off: null, low: 'low', high: 'high', max: 'max' },
+          }],
+        },
+      },
     })
-    expect(configured.groups.some(group => group.id === 'test-gateway')).toBe(true)
+    expect(configured.groups.find(group => group.id === 'test-gateway')?.models[0]).toMatchObject({
+      id: 'glm-5.3-flash',
+      reasoningEfforts: [
+        { id: 'off' },
+        { id: 'low' },
+        { id: 'high' },
+        { id: 'max' },
+      ],
+      defaultReasoningEffort: 'high',
+    })
     expect(JSON.stringify(configured)).not.toContain('keyless-harness-studio-test')
     const restored = await runtime.getSession(created.sessionId)
     expect(restored).toMatchObject({ id: created.sessionId, cwd: projectDir })
+    const pastedImage = new Uint8Array(100_000)
+    pastedImage.set([137, 80, 78, 71])
+    await expect(runtime.uploadImage(created.sessionId, {
+      name: 'pasted.png',
+      mediaType: 'image/png',
+      bytes: pastedImage,
+    })).resolves.toMatchObject({
+      name: 'pasted.png',
+      bytes: 100_000,
+    })
     await expect(runtime.selectModel(created.sessionId, {
       provider: 'test-gateway',
-      model: 'test-model',
+      model: 'glm-5.3-flash',
+      reasoningEffort: 'high',
     })).resolves.toMatchObject({
       provider: 'test-gateway',
-      model: 'test-model',
+      model: 'glm-5.3-flash',
+      reasoningEffort: 'high',
     })
     let resolveStreamed!: (session: NonNullable<typeof restored>) => void
     const streamed = new Promise<NonNullable<typeof restored>>(resolve => { resolveStreamed = resolve })
@@ -410,6 +446,9 @@ export function apply(ctx) {
       expectedText: string,
       apiKey: string,
     ) => {
+      const modelId = protocol === 'openai-responses'
+        ? 'openai.gpt-5.6-sol'
+        : `${providerId}-model`
       await runtime.updateModelConfiguration({
         upsertProfile: {
           id: providerId,
@@ -417,10 +456,14 @@ export function apply(ctx) {
           protocol,
           baseURL: `http://127.0.0.1:${String(providerAddress.port)}`,
           apiKey,
-          models: [{ id: `${providerId}-model`, name: providerId, contextWindow: 131_072, maxTokens: 4096 }],
+          models: [{ id: modelId, name: providerId, contextWindow: 131_072, maxTokens: 4096 }],
         },
       })
-      await runtime.selectModel(created.sessionId, { provider: providerId, model: `${providerId}-model` })
+      await runtime.selectModel(created.sessionId, {
+        provider: providerId,
+        model: modelId,
+        ...(protocol === 'openai-responses' ? { reasoningEffort: 'high' } : {}),
+      })
       let resolveCompleted!: () => void
       const seen = new Promise<void>(resolve => { resolveCompleted = resolve })
       const stop = runtime.subscribe(event => {
@@ -451,12 +494,20 @@ export function apply(ctx) {
       expect.objectContaining({
         path: '/chat/completions',
         authorization: 'Bearer keyless-harness-studio-test',
-        model: 'test-model',
+        model: 'glm-5.3-flash',
         tools: expect.arrayContaining(['web_search', 'web_fetch']),
       }),
-      expect.objectContaining({ path: '/responses', authorization: 'Bearer responses-secret', model: 'responses-gateway-model' }),
+      expect.objectContaining({
+        path: '/responses',
+        authorization: 'Bearer responses-secret',
+        model: 'openai.gpt-5.6-sol',
+        reasoning: { effort: 'high' },
+      }),
       expect.objectContaining({ path: '/v1/messages', apiKey: 'anthropic-secret', model: 'anthropic-gateway-model' }),
     ]))
+    const responsesRequest = providerRequests.find(request => request.path === '/responses')
+    expect(responsesRequest?.reasoning).not.toHaveProperty('summary')
+    expect(responsesRequest?.include).toBeUndefined()
     await expect(runtime.getContextStatus(created.sessionId)).resolves.toMatchObject({
       contextWindow: 131_072,
       usage: { outputTokens: expect.any(Number) },

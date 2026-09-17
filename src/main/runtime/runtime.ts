@@ -26,6 +26,7 @@ import type {
   CommandSummary,
   ComposerCommandSubmission,
   ComposerFileAttachment,
+  ComposerImageUpload,
   ComposerSubmission,
   ToolCard,
 } from '../../shared/contracts.js'
@@ -43,6 +44,7 @@ export interface AgentRuntime {
   listCommands(sessionId: string): Promise<CommandSummary[]>
   runCommand(sessionId: string, submission: ComposerCommandSubmission): Promise<void>
   uploadFile(sessionId: string, path: string): Promise<ComposerFileAttachment>
+  uploadImage(sessionId: string, image: ComposerImageUpload): Promise<ComposerFileAttachment>
   listWorkspaceFiles(sessionId: string, query: string): Promise<FileCandidate[]>
   getModelConfiguration(): Promise<ModelConfiguration>
   updateModelConfiguration(update: ModelConfigurationUpdate): Promise<ModelConfiguration>

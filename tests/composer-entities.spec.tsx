@@ -31,8 +31,26 @@ const modelConfiguration: ModelConfiguration = {
     id: 'provider-a',
     name: 'Provider A',
     models: [
-      { id: 'model-a', name: 'Model A', reasoningEfforts: [] },
-      { id: 'model-b', name: 'Model B', reasoningEfforts: [] },
+      {
+        id: 'model-a',
+        name: 'Model A',
+        reasoningEfforts: [
+          { id: 'off', name: 'Off' },
+          { id: 'low', name: 'Low' },
+          { id: 'high', name: 'High' },
+        ],
+        defaultReasoningEffort: 'high',
+      },
+      {
+        id: 'model-b',
+        name: 'Model B',
+        reasoningEfforts: [
+          { id: 'minimal', name: 'Minimal' },
+          { id: 'medium', name: 'Medium' },
+          { id: 'xhigh', name: 'Extra high' },
+        ],
+        defaultReasoningEffort: 'medium',
+      },
     ],
   }],
   profiles: [{
@@ -56,6 +74,8 @@ function installApi(overrides: {
   compact?: ReturnType<typeof vi.fn>
   contextGet?: ReturnType<typeof vi.fn>
   pickFiles?: ReturnType<typeof vi.fn>
+  pasteImage?: ReturnType<typeof vi.fn>
+  uploadImage?: ReturnType<typeof vi.fn>
   files?: ReturnType<typeof vi.fn>
   selectModel?: ReturnType<typeof vi.fn>
   modelConfiguration?: ModelConfiguration
@@ -65,6 +85,12 @@ function installApi(overrides: {
   const compact = overrides.compact ?? vi.fn().mockResolvedValue({ status: 'complete' })
   const contextGet = overrides.contextGet ?? vi.fn().mockResolvedValue(undefined)
   const pickFiles = overrides.pickFiles ?? vi.fn().mockResolvedValue([])
+  const pasteImage = overrides.pasteImage ?? vi.fn().mockResolvedValue(undefined)
+  const uploadImage = overrides.uploadImage ?? vi.fn().mockResolvedValue({
+    receiptId: 'image-receipt',
+    name: 'pasted-image.png',
+    bytes: 4,
+  })
   const files = overrides.files ?? vi.fn().mockResolvedValue([])
   const selectModel = overrides.selectModel ?? vi.fn().mockImplementation((_scope, _id, selection) => Promise.resolve(selection))
   Object.defineProperty(window, 'harnessStudio', {
@@ -123,7 +149,7 @@ function installApi(overrides: {
         get: vi.fn().mockResolvedValue(undefined),
       },
       context: { get: contextGet, compact },
-      workspace: { pickFiles, files },
+      workspace: { pickFiles, pasteImage, uploadImage, files },
       runtime: {
         mode: vi.fn().mockResolvedValue('harness'),
         status: vi.fn().mockResolvedValue({ phase: 'ready' }),
@@ -131,11 +157,19 @@ function installApi(overrides: {
       },
     },
   })
-  return { run, command, compact, contextGet, pickFiles, files, selectModel }
+  return { run, command, compact, contextGet, pickFiles, pasteImage, uploadImage, files, selectModel }
 }
 
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn()
+  Object.defineProperty(URL, 'createObjectURL', {
+    configurable: true,
+    value: vi.fn(() => 'blob:harness-studio-preview'),
+  })
+  Object.defineProperty(URL, 'revokeObjectURL', {
+    configurable: true,
+    value: vi.fn(),
+  })
   localStorage.setItem('harness-studio:session-view-state', JSON.stringify({
     scope: 'project',
     selected: { project: session.id },
@@ -161,9 +195,33 @@ describe('structured composer entities', () => {
     expect(selectModel).toHaveBeenCalledWith('project', session.id, {
       provider: 'provider-a',
       model: 'model-b',
+      reasoningEffort: 'medium',
     })
     expect(screen.queryByRole('menu', { name: '模型列表' })).toBeNull()
     expect(picker.getAttribute('aria-busy')).toBe('true')
+  })
+
+  it('offers only the reasoning efforts declared by the active model', async () => {
+    const api = installApi({ modelConfiguration })
+    render(<CodexApp />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'High' }))
+    expect(screen.getByRole('button', { name: 'Off' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Low' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Low' }))
+    await waitFor(() => expect(api.selectModel).toHaveBeenCalledWith('project', session.id, {
+      provider: 'provider-a',
+      model: 'model-a',
+      reasoningEffort: 'low',
+    }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Model A' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Model B' }))
+    await screen.findByRole('button', { name: 'Medium' })
+    fireEvent.click(screen.getByRole('button', { name: 'Medium' }))
+    expect(screen.getByRole('button', { name: 'Minimal' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Extra High' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Low' })).toBeNull()
   })
 
   it('opens Finder first for @, presents the uploaded file as a removable entity, and sends an attachment receipt', async () => {
@@ -189,6 +247,104 @@ describe('structured composer entities', () => {
       references: [],
       attachments: [{ receiptId: 'receipt-1', name: 'brief.pdf', bytes: 2_048 }],
     }))
+  })
+
+  it('pastes an image as a preview and sends its staged Harness receipt', async () => {
+    const bytes = new Uint8Array([137, 80, 78, 71])
+    const image = new File([bytes], 'screenshot.png', { type: 'image/png' })
+    Object.defineProperty(image, 'arrayBuffer', {
+      configurable: true,
+      value: vi.fn().mockResolvedValue(bytes.buffer),
+    })
+    const uploadImage = vi.fn().mockResolvedValue({
+      receiptId: 'receipt-image',
+      name: 'screenshot.png',
+      bytes: bytes.byteLength,
+    })
+    const { run } = installApi({ uploadImage })
+    render(<CodexApp />)
+
+    const input = await screen.findByRole('textbox', { name: '描述编程任务' })
+    fireEvent.paste(input, {
+      clipboardData: {
+        types: ['image/png'],
+        getData: () => '',
+        items: [{
+          kind: 'file',
+          type: 'image/png',
+          getAsFile: () => image,
+        }],
+      },
+    })
+
+    await waitFor(() => expect(uploadImage).toHaveBeenCalledWith('project', session.id, {
+      name: 'screenshot.png',
+      mediaType: 'image/png',
+      bytes,
+    }))
+    expect(await screen.findByRole('img', { name: 'screenshot.png' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '移除图片 screenshot.png' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(run).toHaveBeenCalledWith('project', session.id, {
+      text: '',
+      references: [],
+      attachments: [{ receiptId: 'receipt-image', name: 'screenshot.png', bytes: 4 }],
+    }))
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:harness-studio-preview')
+  })
+
+  it('hides transport details when a clipboard image upload fails', async () => {
+    const image = new File([new Uint8Array([1, 2, 3])], 'screenshot.png', { type: 'image/png' })
+    Object.defineProperty(image, 'arrayBuffer', {
+      configurable: true,
+      value: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3]).buffer),
+    })
+    installApi({
+      uploadImage: vi.fn().mockRejectedValue(new Error(
+        "Error invoking remote method 'harness-studio:workspace:upload-image': request pipe frame exceeds limit",
+      )),
+    })
+    render(<CodexApp />)
+
+    const input = await screen.findByRole('textbox', { name: '描述编程任务' })
+    fireEvent.paste(input, {
+      clipboardData: {
+        types: ['image/png'],
+        getData: () => '',
+        items: [{
+          kind: 'file',
+          type: 'image/png',
+          getAsFile: () => image,
+        }],
+      },
+    })
+
+    expect(await screen.findByText('图片上传失败，请稍后重试。')).toBeTruthy()
+    expect(screen.queryByText(/request pipe frame/u)).toBeNull()
+  })
+
+  it('uses Electron native clipboard capture for a macOS screenshot', async () => {
+    const pasteImage = vi.fn().mockResolvedValue({
+      attachment: { receiptId: 'native-image', name: 'pasted-image.png', bytes: 53_000 },
+      mediaType: 'image/png',
+      previewDataUrl: 'data:image/png;base64,cHJldmlldw==',
+    })
+    installApi({ pasteImage })
+    render(<CodexApp />)
+
+    const input = await screen.findByRole('textbox', { name: '描述编程任务' })
+    fireEvent.paste(input, {
+      clipboardData: {
+        types: ['image/tiff'],
+        getData: () => '',
+        items: [],
+      },
+    })
+
+    await waitFor(() => expect(pasteImage).toHaveBeenCalledWith('project', session.id))
+    const preview = await screen.findByRole('img', { name: 'pasted-image.png' })
+    expect(preview.getAttribute('src')).toBe('data:image/png;base64,cHJldmlldw==')
   })
 
   it('keeps a selected workspace path out of free text and submits its Harness mention serialization', async () => {
@@ -233,7 +389,8 @@ describe('structured composer entities', () => {
     const input = await screen.findByRole('textbox', { name: '描述编程任务' })
     fireEvent.change(input, { target: { value: '/agent', selectionStart: 6 } })
     fireEvent.click(await screen.findByRole('option', { name: /agent-browser/u }))
-    expect(screen.getByText('技能')).toBeTruthy()
+    expect(screen.getByText('Agent Browser')).toBeTruthy()
+    expect(document.querySelector('.composer-invocation-token.skill')).toBeTruthy()
     expect((input as HTMLTextAreaElement).value).toBe('')
 
     fireEvent.change(input, { target: { value: '打开文档', selectionStart: 4 } })
@@ -269,6 +426,7 @@ describe('structured composer entities', () => {
     fireEvent.click(await screen.findByRole('option', { name: new RegExp(`/${name}`) }))
 
     expect(screen.getByRole('button', { name: `退出${label}模式` })).toBeTruthy()
+    expect(document.querySelector(`.composer-mode.${name}`)).toBeTruthy()
     expect((input as HTMLTextAreaElement).placeholder).toContain(placeholder)
     expect((input as HTMLTextAreaElement).value).toBe('')
 

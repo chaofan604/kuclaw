@@ -31,6 +31,7 @@ import type {
   CommandSummary,
   ComposerCommandSubmission,
   ComposerFileAttachment,
+  ComposerImageUpload,
   ComposerSubmission,
   ToolCard,
 } from '../../shared/contracts.js'
@@ -332,6 +333,14 @@ export class MockAgentRuntime implements AgentRuntime {
       name: basename(path),
       bytes: info.size,
     }
+  }
+
+  uploadImage(_sessionId: string, image: ComposerImageUpload): Promise<ComposerFileAttachment> {
+    return Promise.resolve({
+      receiptId: `simulation-${randomUUID()}`,
+      name: image.name,
+      bytes: image.bytes.byteLength,
+    })
   }
 
   /** Bounded workspace scan that mirrors the Harness file-reference candidates. */

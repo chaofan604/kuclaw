@@ -26,6 +26,7 @@ import type {
   CommandSummary,
   ComposerCommandSubmission,
   ComposerFileAttachment,
+  ComposerImageUpload,
   ComposerSubmission,
 } from '../../shared/contracts.js'
 import type { AgentRuntime } from './runtime.js'
@@ -85,6 +86,9 @@ export class HarnessRuntimeSupervisor implements AgentRuntime {
   }
   uploadFile(id: string, path: string): Promise<ComposerFileAttachment> {
     return this.withRuntime(runtime => runtime.uploadFile(id, path))
+  }
+  uploadImage(id: string, image: ComposerImageUpload): Promise<ComposerFileAttachment> {
+    return this.withRuntime(runtime => runtime.uploadImage(id, image))
   }
   listWorkspaceFiles(id: string, query: string): Promise<FileCandidate[]> {
     return this.withRuntime(runtime => runtime.listWorkspaceFiles(id, query))
