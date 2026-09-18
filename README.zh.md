@@ -34,7 +34,7 @@ Kuclaw 是一个使用 Electron 和 React 构建的 macOS 桌面编程 Agent。�
 
 ## DeepSeek Harness 接入与扩展
 
-Kuclaw 将 DeepSeek Harness 上游提交 [`c291e7961a515f6d7af9304e7fd1d257929aef26`](https://github.com/deepseek-ai/deepseek-harness/commit/c291e7961a515f6d7af9304e7fd1d257929aef26) 作为 vendored source，并在其上增加桌面产品需要的接入层和服务能力。
+Kuclaw 将 DeepSeek Harness 上游提交 [`ddefc45fbc7f8e46dd73185e68295696d1297887`](https://github.com/deepseek-ai/deepseek-harness/commit/ddefc45fbc7f8e46dd73185e68295696d1297887) 作为 vendored source，并在其上增加桌面产品需要的接入层和服务能力。
 
 | 能力 | DeepSeek Harness 实现 | Kuclaw 接入方式 |
 |---|---|---|

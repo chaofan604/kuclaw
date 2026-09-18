@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-api-scheduled-task-controller",
   "description": "Remote API for Host-scoped scheduled Agent tasks",
-  "version": "0.1.5-rc.2",
+  "version": "0.1.6-alpha.2",
   "publishConfig": {
     "access": "public"
   },

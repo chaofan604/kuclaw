@@ -134,7 +134,7 @@ async function resolveAllowedAddresses(
     : [{ address: unbracketed, family: literalFamily }]
 
   validateAddressEntries(hostname, resolved)
-  const blocked = resolved.some(entry => {
+  const blocked = resolved.some((entry) => {
     const syntheticDnsAddress = literalFamily === 0 && addressMatchesRanges(entry.address, syntheticDnsRanges)
     return !isPublicIpAddress(entry.address) && !syntheticDnsAddress
   })
@@ -251,7 +251,7 @@ interface DnsJsonResponse {
 function isDnsJsonResponse(value: unknown): value is DnsJsonResponse {
   if (typeof value !== 'object' || value === null) return false
   const answer = (value as { Answer?: unknown }).Answer
-  return answer === undefined || (Array.isArray(answer) && answer.every(entry => {
+  return answer === undefined || (Array.isArray(answer) && answer.every((entry) => {
     if (typeof entry !== 'object' || entry === null) return false
     const candidate = entry as { type?: unknown; data?: unknown }
     return typeof candidate.type === 'number' && typeof candidate.data === 'string'

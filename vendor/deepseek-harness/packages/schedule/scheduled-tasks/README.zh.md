@@ -17,7 +17,7 @@ kind: "package-reference"
 - [理解实现](#understand-the-implementation)
 - [模型体验](#model-experience)
 - [已知限制与后续工作](#known-limitations-and-deferred-work)
-- [开发说明](#dev-note)
+- [开发备注](#dev-note)
 
 -----
 
@@ -105,6 +105,6 @@ kind: "package-reference"
 -----
 
 <a id="dev-note"></a>
-### 开发说明
+### 开发备注
 
 `pnpm run build` 通过 `tsc` 输出 `lib/types`，并通过 `tsdown` 打包 `lib/index.js`。用 `pnpm vitest run packages/schedule/scheduled-tasks` 运行包测试。

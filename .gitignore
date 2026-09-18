@@ -1,7 +1,7 @@
 node_modules/
 .pnpm-store/
 dist/
-release/
+/release/
 release-validation-*/
 build-resources/*
 !build-resources/icon.svg

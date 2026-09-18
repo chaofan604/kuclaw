@@ -20,18 +20,23 @@ function numeric(value: string, name: string): number {
   return Number(value)
 }
 
-function range(values: Set<number>, start: number, end: number, step: number, minimum: number, maximum: number, name: string): void {
+function range(
+  values: Set<number>, start: number, end: number, step: number,
+  minimum: number, maximum: number, name: string,
+): void {
   if (step < 1 || start < minimum || end > maximum || start > end) throw new Error(`${name} is outside its supported range`)
   for (let value = start; value <= end; value += step) values.add(maximum === 7 && value === 7 ? 0 : value)
 }
 
 function field(source: string, index: number): CronField {
-  const limit = LIMITS[index]!
+  const limit = LIMITS[index]
+  if (limit === undefined) throw new Error('cron field index is outside its supported range')
   const values = new Set<number>()
   for (const item of source.split(',')) {
     const segments = item.split('/')
     if (segments.length > 2) throw new Error(`${limit.name} has an invalid step`)
-    const selector = segments[0]!
+    const selector = segments[0]
+    if (selector === undefined) throw new Error(`${limit.name} is empty`)
     const step = segments[1] === undefined ? 1 : numeric(segments[1], limit.name)
     if (selector === '*') {
       range(values, limit.minimum, limit.maximum, step, limit.minimum, limit.maximum, limit.name)
@@ -39,12 +44,15 @@ function field(source: string, index: number): CronField {
     }
     const bounds = selector.split('-')
     if (bounds.length === 1) {
-      const value = numeric(bounds[0]!, limit.name)
+      const value = numeric(bounds[0] ?? '', limit.name)
       range(values, value, value, step, limit.minimum, limit.maximum, limit.name)
       continue
     }
     if (bounds.length !== 2) throw new Error(`${limit.name} has an invalid range`)
-    range(values, numeric(bounds[0]!, limit.name), numeric(bounds[1]!, limit.name), step, limit.minimum, limit.maximum, limit.name)
+    range(
+      values, numeric(bounds[0] ?? '', limit.name), numeric(bounds[1] ?? '', limit.name),
+      step, limit.minimum, limit.maximum, limit.name,
+    )
   }
   return { wildcard: source === '*', values }
 }
@@ -52,9 +60,13 @@ function field(source: string, index: number): CronField {
 function parse(expression: string): CronSchedule {
   const values = expression.trim().split(/\s+/u)
   if (values.length !== 5) throw new Error('cron must contain five fields: minute hour day month weekday')
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = values
+  if (minute === undefined || hour === undefined || dayOfMonth === undefined || month === undefined || dayOfWeek === undefined) {
+    throw new Error('cron must contain five fields: minute hour day month weekday')
+  }
   return {
-    minute: field(values[0]!, 0), hour: field(values[1]!, 1), dayOfMonth: field(values[2]!, 2),
-    month: field(values[3]!, 3), dayOfWeek: field(values[4]!, 4),
+    minute: field(minute, 0), hour: field(hour, 1), dayOfMonth: field(dayOfMonth, 2),
+    month: field(month, 3), dayOfWeek: field(dayOfWeek, 4),
   }
 }
 
@@ -72,17 +84,24 @@ function formatter(timeZone: string): Intl.DateTimeFormat {
 function parts(value: number, format: Intl.DateTimeFormat) {
   const mapped = Object.fromEntries(format.formatToParts(new Date(value))
     .filter(part => part.type !== 'literal').map(part => [part.type, Number(part.value)])) as Record<string, number>
-  const year = mapped['year']!
-  const month = mapped['month']!
-  const day = mapped['day']!
+  const year = mapped['year']
+  const month = mapped['month']
+  const day = mapped['day']
+  const minute = mapped['minute']
+  const hour = mapped['hour']
+  if (year === undefined || month === undefined || day === undefined || minute === undefined || hour === undefined) {
+    throw new Error('timeZone formatter omitted a required date part')
+  }
   return {
-    minute: mapped['minute']!, hour: mapped['hour']!, day, month,
+    minute, hour, day, month,
     weekday: new Date(Date.UTC(year, month - 1, day)).getUTCDay(),
   }
 }
 
 function matches(schedule: CronSchedule, value: ReturnType<typeof parts>): boolean {
-  if (!schedule.minute.values.has(value.minute) || !schedule.hour.values.has(value.hour) || !schedule.month.values.has(value.month)) return false
+  if (!schedule.minute.values.has(value.minute)
+    || !schedule.hour.values.has(value.hour)
+    || !schedule.month.values.has(value.month)) return false
   const day = schedule.dayOfMonth.values.has(value.day)
   const weekday = schedule.dayOfWeek.values.has(value.weekday)
   return schedule.dayOfMonth.wildcard ? weekday : schedule.dayOfWeek.wildcard ? day : day || weekday

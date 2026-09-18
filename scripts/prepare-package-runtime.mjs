@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { createWriteStream, existsSync, mkdirSync, readFileSync, symlinkSync } from 'node:fs'
-import { chmod, copyFile, cp, lstat, mkdir, readFile, readdir, readlink, rm, symlink, writeFile } from 'node:fs/promises'
-import { basename, dirname, join, relative, resolve } from 'node:path'
+import { chmod, copyFile, cp, lstat, mkdir, readFile, readdir, readlink, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { spawn } from 'node:child_process'
 
 const projectRoot = resolve(import.meta.dirname, '..')
@@ -116,7 +116,56 @@ async function copyPackageWithoutDependencies(source, target) {
   })
 }
 
+/** True when both paths are the same inode: a pnpm deploy hardlink keeps them byte-identical. */
+async function sharesInode(left, right) {
+  try {
+    const [from, to] = await Promise.all([stat(left), stat(right)])
+    return from.dev === to.dev && from.ino === to.ino
+  } catch {
+    return false
+  }
+}
+
+/** Refuse to replace a path that resolves outside the harness root, so a stray link cannot delete sources. */
+async function assertHarnessLocal(target) {
+  const resolved = await realpath(target)
+  const relativePath = relative(harnessRoot, resolved)
+  if (relativePath === '..' || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
+    throw new Error(`package runtime: refusing to replace ${target} outside the harness root`)
+  }
+}
+
+/** Replace a file that pnpm may have hardlinked from the same source, instead of failing on identical inodes. */
+async function replaceFile(source, target) {
+  if (await sharesInode(source, target)) return
+  if (existsSync(target)) await assertHarnessLocal(target)
+  await rm(target, { force: true })
+  await copyFile(source, target)
+}
+
+/** Replace a directory tree that pnpm may have hardlinked from the same source. */
+async function replaceDirectory(source, target) {
+  if (await sharesInode(join(source, 'index.js'), join(target, 'index.js'))) return
+  if (existsSync(target)) await assertHarnessLocal(target)
+  await rm(target, { recursive: true, force: true })
+  await cp(source, target, { recursive: true, dereference: true })
+}
+
 let internalPackageSources
+
+let pnpmStoreEntries
+
+/** Locate a nested npm dependency in the vendor pnpm store so the closure can keep walking its manifest. */
+async function findNestedPackageRoot(name) {
+  pnpmStoreEntries ??= await readdir(join(upstreamRoot, 'node_modules', '.pnpm'), { withFileTypes: true })
+  const prefix = `${name.replace('/', '+')}@`
+  for (const entry of pnpmStoreEntries) {
+    if (!entry.isDirectory() || !entry.name.startsWith(prefix)) continue
+    const candidate = join(upstreamRoot, 'node_modules', '.pnpm', entry.name, 'node_modules', ...name.split('/'))
+    if (existsSync(join(candidate, 'package.json'))) return candidate
+  }
+  return undefined
+}
 
 async function loadInternalPackageSources() {
   if (internalPackageSources !== undefined) return internalPackageSources
@@ -155,7 +204,8 @@ async function materializeInternalClosure(root) {
     const target = join(root, 'node_modules', ...name.split('/'))
     const linkedSource = join(upstreamRoot, 'node_modules', ...name.split('/'))
     const source = existsSync(linkedSource) ? linkedSource : sources.get(name)
-    const manifestRoot = source ?? target
+    const manifestRoot = source ?? (existsSync(join(target, 'package.json')) ? target : await findNestedPackageRoot(name))
+    if (manifestRoot === undefined) continue
     const manifest = JSON.parse(await readFile(join(manifestRoot, 'package.json'), 'utf8'))
     for (const section of ['dependencies', 'peerDependencies', 'optionalDependencies']) {
       for (const dependency of Object.keys(manifest[section] ?? {})) {
@@ -163,7 +213,8 @@ async function materializeInternalClosure(root) {
       }
     }
     if (existsSync(target)) continue
-    if (source === undefined || !existsSync(source)) throw new Error(`package runtime: cannot materialize ${name}`)
+    if (source === undefined) continue
+    if (!existsSync(source)) throw new Error(`package runtime: cannot materialize ${name}`)
     await mkdir(dirname(target), { recursive: true })
     await copyPackageWithoutDependencies(source, target)
     count += 1
@@ -276,51 +327,45 @@ async function prepareHarness() {
     [join(upstreamRoot, 'packages', 'web', 'web-fetch-http', 'lib'), join(webFetchTarget, 'lib')],
     [join(upstreamRoot, 'packages', 'llm', 'llm-pi-ai', 'lib'), join(llmPiAiTarget, 'lib')],
   ]
-  await Promise.all(requiredLibs
-    .filter(([, target]) => !existsSync(join(target, 'index.js')))
-    .map(([source, target]) => cp(source, target, { recursive: true, dereference: true })))
+  await Promise.all(requiredLibs.map(([source, target]) => replaceDirectory(source, target)))
   if (targetArch === 'arm64') await Promise.all([
-    copyFile(join(upstreamRoot, 'apps', 'desktop-host', 'package.json'), join(harnessRoot, 'package.json')),
-    copyFile(join(upstreamRoot, 'apps', 'desktop-host', 'lib', 'index.js'), entry),
-    copyFile(
+    replaceFile(join(upstreamRoot, 'apps', 'desktop-host', 'package.json'), join(harnessRoot, 'package.json')),
+    replaceFile(join(upstreamRoot, 'apps', 'desktop-host', 'lib', 'index.js'), entry),
+    replaceFile(
       join(upstreamRoot, 'apps', 'desktop-host', 'config', 'desktop.cordis.patch.yml'),
       join(harnessRoot, 'config', 'desktop.cordis.patch.yml'),
     ),
-    copyFile(
+    replaceFile(
       join(upstreamRoot, 'packages', 'schedule', 'scheduled-tasks', 'package.json'),
       join(scheduledTasksTarget, 'package.json'),
     ),
-    cp(
+    replaceDirectory(
       join(upstreamRoot, 'packages', 'schedule', 'scheduled-tasks', 'lib'),
       join(scheduledTasksTarget, 'lib'),
-      { recursive: true, dereference: true },
     ),
-    copyFile(
+    replaceFile(
       join(upstreamRoot, 'packages', 'api', 'scheduled-task-controller', 'package.json'),
       join(scheduledControllerTarget, 'package.json'),
     ),
-    cp(
+    replaceDirectory(
       join(upstreamRoot, 'packages', 'api', 'scheduled-task-controller', 'lib'),
       join(scheduledControllerTarget, 'lib'),
-      { recursive: true, dereference: true },
     ),
-    copyFile(
+    replaceFile(
       join(upstreamRoot, 'packages', 'web', 'web-fetch-http', 'package.json'),
       join(webFetchTarget, 'package.json'),
     ),
-    cp(
+    replaceDirectory(
       join(upstreamRoot, 'packages', 'web', 'web-fetch-http', 'lib'),
       join(webFetchTarget, 'lib'),
-      { recursive: true, dereference: true },
     ),
-    copyFile(
+    replaceFile(
       join(upstreamRoot, 'packages', 'llm', 'llm-pi-ai', 'package.json'),
       join(llmPiAiTarget, 'package.json'),
     ),
-    cp(
+    replaceDirectory(
       join(upstreamRoot, 'packages', 'llm', 'llm-pi-ai', 'lib'),
       join(llmPiAiTarget, 'lib'),
-      { recursive: true, dereference: true },
     ),
   ])
   materialized += await materializeExternalLinks(harnessRoot)

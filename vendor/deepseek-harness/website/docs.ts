@@ -251,7 +251,7 @@ const develop = pairedPages([
   {
     source: 'docs/user/develop/practice/dynamic-cordis.md',
     route: 'develop/practice/dynamic-cordis.md',
-    label: { root: '运行时 Cordis 工具', en: 'Runtime Cordis tools' },
+    label: { root: '持久化 Harness 插件', en: 'Persistent Harness plugins' },
     sidebar: { root: 'zh-develop', en: 'en-develop' },
     section: { root: '实战', en: 'Practice' },
     order: 3,
@@ -326,7 +326,7 @@ const subsystemGroups = [
     ['jobs.md', '后台任务', 'Background jobs'],
     ['filesystem.md', '文件系统', 'Filesystem'],
     ['lsp.md', 'LSP 导航', 'LSP navigation'],
-    ['code-runtime.md', '代码运行时', 'Code runtime'],
+    ['ptc-runtime.md', 'PTC 运行时', 'PTC runtime'],
     ['web.md', 'Web 访问', 'Web access'],
     ['skills.md', '技能', 'Skills'],
     ['workflow.md', '工作流', 'Workflows'],
@@ -341,6 +341,7 @@ const subsystemGroups = [
     ['commands.md', '命令', 'Human commands'],
     ['goal.md', '目标', 'Goals'],
     ['schedule.md', '定时提醒', 'Scheduled reminders'],
+    ['scheduled-tasks.md', 'Host 定时任务', 'Host scheduled tasks'],
   ]],
   ['平台与接入', 'Platform and access', [
     ['web-server.md', 'HTTP 服务器', 'HTTP server'],

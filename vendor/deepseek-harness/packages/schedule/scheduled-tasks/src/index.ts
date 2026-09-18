@@ -24,13 +24,31 @@ declare module '@deepseek-ai/cordis' {
 }
 
 interface TaskRow {
-  id: string; name: string; workspace_path: string; cron: string; time_zone: string; prompt: string
-  model_json: string; preset: string; enabled: number; concurrency: 'skip' | 'queue'
-  missed_run_policy: 'skip' | 'run-once'; next_run_at: number; created_at: number; updated_at: number
+  id: string
+  name: string
+  workspace_path: string
+  cron: string
+  time_zone: string
+  prompt: string
+  model_json: string
+  preset: string
+  enabled: number
+  concurrency: 'skip' | 'queue'
+  missed_run_policy: 'skip' | 'run-once'
+  next_run_at: number
+  created_at: number
+  updated_at: number
 }
 interface RunRow {
-  id: string; task_id: string; scheduled_at: number; session_id: string | null; status: ScheduledTaskRunStatus
-  started_at: number | null; finished_at: number | null; error_code: string | null; error_message: string | null
+  id: string
+  task_id: string
+  scheduled_at: number
+  session_id: string | null
+  status: ScheduledTaskRunStatus
+  started_at: number | null
+  finished_at: number | null
+  error_code: string | null
+  error_message: string | null
 }
 
 /** Provider configuration. */
@@ -94,7 +112,7 @@ export class ScheduledTasks extends Service {
       this.database.prepare("UPDATE scheduled_tasks SET preset = '' WHERE preset = 'default'").run()
     }
     if (schema.user_version < SCHEMA_VERSION) this.database.exec(`PRAGMA user_version = ${String(SCHEMA_VERSION)}`)
-    this.database.prepare(`UPDATE scheduled_task_runs SET status = 'failed', finished_at = ?, error_code = 'host-restarted', error_message = 'Host restarted before the run completed' WHERE status IN ('pending', 'running')`).run(Date.now())
+    this.database.prepare('UPDATE scheduled_task_runs SET status = \'failed\', finished_at = ?, error_code = \'host-restarted\', error_message = \'Host restarted before the run completed\' WHERE status IN (\'pending\', \'running\')').run(Date.now())
     ctx.on('agent/status', ({ agent, status }) => {
       const run = this.runForSession(String(agent.id))
       if (run === undefined || status === 'running') return
@@ -104,7 +122,7 @@ export class ScheduledTasks extends Service {
       const run = this.runForSession(String(agent.id))
       if (run !== undefined) this.finish(run, 'failed', 'agent-error', error instanceof Error ? error.message : String(error))
     }, { global: true })
-    ctx.effect(() => () => this.dispose(), 'scheduled-tasks teardown')
+    ctx.effect(() => () => { this.dispose() }, 'scheduled-tasks teardown')
     this.recoverMissedRuns()
     this.scheduleWake()
   }
@@ -185,11 +203,12 @@ export class ScheduledTasks extends Service {
    * Cancel one running scheduled execution.
    * @param id - run identity; a settled run is a no-op.
    */
-  async cancelRun(id: ScheduledTaskRunId): Promise<void> {
+  cancelRun(id: ScheduledTaskRunId): Promise<void> {
     const run = this.requireRun(id)
-    if (run.status !== 'pending' && run.status !== 'running') return
-    if (run.sessionId !== undefined) await this.ctx.sessionController.cancel({ sessionId: run.sessionId as never })
+    if (run.status !== 'pending' && run.status !== 'running') return Promise.resolve()
+    if (run.sessionId !== undefined) this.ctx.sessionController.cancel({ sessionId: run.sessionId as never })
     this.finish(run, 'cancelled')
+    return Promise.resolve()
   }
 
   /**
@@ -198,7 +217,7 @@ export class ScheduledTasks extends Service {
    * @param limit - maximum rows, bounded to 1..200; defaults to 50.
    * @returns the task's runs, newest scheduled first.
    */
-  listRuns(taskId: ScheduledTaskId, limit = 50): ScheduledTaskRun[] {
+  listRuns(taskId: ScheduledTaskId, limit: number = 50): ScheduledTaskRun[] {
     const bounded = Math.min(200, Math.max(1, Math.floor(limit)))
     return (this.database.prepare('SELECT * FROM scheduled_task_runs WHERE task_id = ? ORDER BY scheduled_at DESC LIMIT ?').all(taskId, bounded) as unknown as RunRow[]).map(runFromRow)
   }
@@ -234,12 +253,12 @@ export class ScheduledTasks extends Service {
         ...(task.preset === '' ? {} : { agentPreset: task.preset }),
       })
       if (!this.activeRuns.has(run.id)) {
-        await this.ctx.sessionController.cancel({ sessionId: created.sessionId })
+        this.ctx.sessionController.cancel({ sessionId: created.sessionId })
         return
       }
       await this.ctx.sessionController.selectModel({ sessionId: created.sessionId, ...task.model })
       if (!this.activeRuns.has(run.id)) {
-        await this.ctx.sessionController.cancel({ sessionId: created.sessionId })
+        this.ctx.sessionController.cancel({ sessionId: created.sessionId })
         return
       }
       const running = this.patchRun(run.id, { status: 'running', sessionId: String(created.sessionId), startedAt: Date.now() })
@@ -297,7 +316,8 @@ export class ScheduledTasks extends Service {
       id: randomUUID() as ScheduledTaskRunId, taskId, scheduledAt, status,
       ...(status === 'skipped' ? { finishedAt: now, errorCode: 'concurrency-skip' } : {}),
     }
-    this.database.prepare('INSERT INTO scheduled_task_runs (id, task_id, scheduled_at, status, finished_at, error_code) VALUES (?, ?, ?, ?, ?, ?)')
+    this.database.prepare(`INSERT INTO scheduled_task_runs
+      (id, task_id, scheduled_at, status, finished_at, error_code) VALUES (?, ?, ?, ?, ?, ?)`)
       .run(run.id, taskId, scheduledAt, status, run.finishedAt ?? null, run.errorCode ?? null)
     this.changed(taskId, run.id)
     return run
@@ -305,8 +325,12 @@ export class ScheduledTasks extends Service {
 
   private patchRun(id: ScheduledTaskRunId, patch: Partial<ScheduledTaskRun>): ScheduledTaskRun {
     const value = { ...this.requireRun(id), ...patch }
-    this.database.prepare('UPDATE scheduled_task_runs SET session_id = ?, status = ?, started_at = ?, finished_at = ?, error_code = ?, error_message = ? WHERE id = ?')
-      .run(value.sessionId ?? null, value.status, value.startedAt ?? null, value.finishedAt ?? null, value.errorCode ?? null, value.errorMessage ?? null, id)
+    this.database.prepare(`UPDATE scheduled_task_runs SET session_id = ?, status = ?, started_at = ?,
+      finished_at = ?, error_code = ?, error_message = ? WHERE id = ?`)
+      .run(
+        value.sessionId ?? null, value.status, value.startedAt ?? null, value.finishedAt ?? null,
+        value.errorCode ?? null, value.errorMessage ?? null, id,
+      )
     this.changed(value.taskId, id)
     return value
   }
@@ -314,7 +338,8 @@ export class ScheduledTasks extends Service {
   private tick(): void {
     if (this.closed) return
     const now = Date.now()
-    const due = (this.database.prepare('SELECT * FROM scheduled_tasks WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at').all(now) as unknown as TaskRow[]).map(taskFromRow)
+    const due = (this.database.prepare(`SELECT * FROM scheduled_tasks
+      WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at`).all(now) as unknown as TaskRow[]).map(taskFromRow)
     for (const task of due) {
       const scheduledAt = task.nextRunAt
       const next = nextCronAt(task.cron, task.timeZone, now)
@@ -339,9 +364,13 @@ export class ScheduledTasks extends Service {
   private scheduleWake(): void {
     if (this.timer !== undefined) clearTimeout(this.timer)
     if (this.closed) return
-    const row = this.database.prepare('SELECT next_run_at FROM scheduled_tasks WHERE enabled = 1 ORDER BY next_run_at LIMIT 1').get() as { next_run_at: number } | undefined
+    const row = this.database.prepare(`SELECT next_run_at FROM scheduled_tasks
+      WHERE enabled = 1 ORDER BY next_run_at LIMIT 1`).get() as { next_run_at: number } | undefined
     if (row === undefined) return
-    this.timer = setTimeout(() => this.tick(), Math.min(2_147_000_000, Math.max(0, row.next_run_at - Date.now())))
+    this.timer = setTimeout(
+      () => { this.tick() },
+      Math.min(2_147_000_000, Math.max(0, row.next_run_at - Date.now())),
+    )
   }
 
   private writeTask(task: ScheduledTask): void {
@@ -388,28 +417,56 @@ export class ScheduledTasks extends Service {
 }
 
 function normalizeInput(input: ScheduledTaskInput): Omit<ScheduledTask, 'id' | 'nextRunAt' | 'createdAt' | 'updatedAt'> {
-  const name = input.name.trim(), workspacePath = input.workspacePath.trim(), prompt = input.prompt.trim(), cron = input.cron.trim(), timeZone = input.timeZone.trim()
+  const name = input.name.trim()
+  const workspacePath = input.workspacePath.trim()
+  const prompt = input.prompt.trim()
+  const cron = input.cron.trim()
+  const timeZone = input.timeZone.trim()
   if (name === '' || workspacePath === '' || prompt === '') throw new Error('name, workspacePath, and prompt are required')
   if (input.model.provider.trim() === '' || input.model.model.trim() === '') throw new Error('model provider and id are required')
   validateCron(cron, timeZone)
   return {
     name, workspacePath, prompt, cron, timeZone,
-    model: { provider: input.model.provider.trim(), model: input.model.model.trim(), ...(input.model.reasoningEffort === undefined ? {} : { reasoningEffort: input.model.reasoningEffort }) },
+    model: {
+      provider: input.model.provider.trim(),
+      model: input.model.model.trim(),
+      ...(input.model.reasoningEffort === undefined ? {} : { reasoningEffort: input.model.reasoningEffort }),
+    },
     preset: input.preset?.trim() || '', enabled: input.enabled ?? true,
     concurrency: input.concurrency ?? 'skip', missedRunPolicy: input.missedRunPolicy ?? 'skip',
   }
 }
 
 function taskFromRow(row: TaskRow): ScheduledTask {
-  return { id: row.id as ScheduledTaskId, name: row.name, workspacePath: row.workspace_path, cron: row.cron, timeZone: row.time_zone,
-    prompt: row.prompt, model: JSON.parse(row.model_json) as ScheduledTask['model'], preset: row.preset, enabled: row.enabled === 1,
-    concurrency: row.concurrency, missedRunPolicy: row.missed_run_policy, nextRunAt: row.next_run_at, createdAt: row.created_at, updatedAt: row.updated_at }
+  return {
+    id: row.id as ScheduledTaskId,
+    name: row.name,
+    workspacePath: row.workspace_path,
+    cron: row.cron,
+    timeZone: row.time_zone,
+    prompt: row.prompt,
+    model: JSON.parse(row.model_json) as ScheduledTask['model'],
+    preset: row.preset,
+    enabled: row.enabled === 1,
+    concurrency: row.concurrency,
+    missedRunPolicy: row.missed_run_policy,
+    nextRunAt: row.next_run_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
 }
 function runFromRow(row: RunRow): ScheduledTaskRun {
-  return { id: row.id as ScheduledTaskRunId, taskId: row.task_id as ScheduledTaskId, scheduledAt: row.scheduled_at,
-    ...(row.session_id === null ? {} : { sessionId: row.session_id }), status: row.status,
-    ...(row.started_at === null ? {} : { startedAt: row.started_at }), ...(row.finished_at === null ? {} : { finishedAt: row.finished_at }),
-    ...(row.error_code === null ? {} : { errorCode: row.error_code }), ...(row.error_message === null ? {} : { errorMessage: row.error_message }) }
+  return {
+    id: row.id as ScheduledTaskRunId,
+    taskId: row.task_id as ScheduledTaskId,
+    scheduledAt: row.scheduled_at,
+    ...(row.session_id === null ? {} : { sessionId: row.session_id }),
+    status: row.status,
+    ...(row.started_at === null ? {} : { startedAt: row.started_at }),
+    ...(row.finished_at === null ? {} : { finishedAt: row.finished_at }),
+    ...(row.error_code === null ? {} : { errorCode: row.error_code }),
+    ...(row.error_message === null ? {} : { errorMessage: row.error_message }),
+  }
 }
 
 export default ScheduledTasks

@@ -34,7 +34,7 @@ The application does not use the feature-limited `dsh-sdk-client` as its primary
 
 ## DeepSeek Harness integration
 
-Kuclaw vendors DeepSeek Harness at upstream commit [`c291e7961a515f6d7af9304e7fd1d257929aef26`](https://github.com/deepseek-ai/deepseek-harness/commit/c291e7961a515f6d7af9304e7fd1d257929aef26), then adds the desktop-specific integration and services required by the product.
+Kuclaw vendors DeepSeek Harness at upstream commit [`ddefc45fbc7f8e46dd73185e68295696d1297887`](https://github.com/deepseek-ai/deepseek-harness/commit/ddefc45fbc7f8e46dd73185e68295696d1297887), then adds the desktop-specific integration and services required by the product.
 
 | Capability | DeepSeek Harness implementation | Kuclaw integration |
 |---|---|---|
