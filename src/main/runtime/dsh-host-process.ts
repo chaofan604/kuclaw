@@ -103,6 +103,11 @@ export class HarnessHostProcess {
     )
     const entry = existsSync(installedEntry) ? installedEntry : join(this.options.runtimeDir, 'lib', 'index.js')
     const child = spawn(this.options.nodeExecutable, [
+      // pnpm's packaged runtime contains peer-variant links for the same Harness
+      // packages. Keep release imports anchored at the top-level links so singleton
+      // registries are not instantiated more than once under different real paths.
+      // Development links point outside runtimeDir and require normal realpath lookup.
+      ...(this.options.allowLinkedProfile === true ? [] : ['--preserve-symlinks']),
       '--expose-internals',
       entry,
       this.options.runtimeDir,

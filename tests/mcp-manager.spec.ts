@@ -34,8 +34,6 @@ describe('McpManager', () => {
     expect(rows).toMatchObject([
       { id: 'llm-deepseek', config: { streamIdleTimeoutMs: 30_000 } },
       { id: 'web', config: { searchProvider: 'harness-studio-ddg', fetchProvider: 'http' } },
-      { id: 'tool-web', disabled: false, config: { search: true, fetch: true } },
-      { id: 'system-prompt' },
       {
         insert: [
           { id: 'harness-studio-prefer-web-fetch' },
@@ -48,16 +46,12 @@ describe('McpManager', () => {
         ],
       },
     ])
-    const systemPrompt = rows.find(row => row.id === 'system-prompt') as {
-      config?: { personaSuffix?: string }
-    } | undefined
-    expect(systemPrompt?.config?.personaSuffix).toContain(
-      'use Simplified Chinese for both your reasoning and final response',
-    )
-    expect(systemPrompt?.config?.personaSuffix).toContain(
-      'If web_fetch fails, try another relevant search result before answering.',
-    )
-    expect(systemPrompt?.config?.personaSuffix).toContain(
+    expect(rows.some(row => row.id === 'tool-web')).toBe(false)
+    expect(rows.some(row => row.id === 'system-prompt')).toBe(false)
+    const guidance = await readFile(join(root, 'profile', 'harness-studio-prefer-web-fetch.mjs'), 'utf8')
+    expect(guidance).toContain('use Simplified Chinese for both your reasoning and final response')
+    expect(guidance).toContain('If web_fetch fails, try another relevant search result before answering.')
+    expect(guidance).toContain(
       'do not expose provider, DNS, or network implementation errors unless the user asks for diagnostics.',
     )
     await expect(manager.test('memory')).resolves.toMatchObject({ status: 'ready', toolCount: 6 })
@@ -69,8 +63,6 @@ describe('McpManager', () => {
     expect(JSON.parse(await readFile(profilePath, 'utf8'))).toMatchObject([
       { id: 'llm-deepseek', config: { streamIdleTimeoutMs: 30_000 } },
       { id: 'web' },
-      { id: 'tool-web', disabled: false, config: { search: true, fetch: true, searchTimeoutMs: 60_000 } },
-      { id: 'system-prompt' },
       {
         insert: [
           { id: 'harness-studio-prefer-web-fetch' },
@@ -78,6 +70,9 @@ describe('McpManager', () => {
         ],
       },
     ])
+    const updatedRows = JSON.parse(await readFile(profilePath, 'utf8')) as Array<Record<string, unknown>>
+    expect(updatedRows.some(row => row.id === 'tool-web')).toBe(false)
+    expect(updatedRows.some(row => row.id === 'system-prompt')).toBe(false)
   })
 
   it('writes a distinct session root into each mode profile', async () => {

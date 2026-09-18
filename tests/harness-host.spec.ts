@@ -57,6 +57,14 @@ async function linkWorkspacePackages(projectDir: string): Promise<void> {
 
 const hostAvailable = existsSync(hostEntry)
 
+it('enables public DNS verification for local Fake-IP answers', () => {
+  const desktopPatch = readFileSync(
+    join(vendorDir, 'apps', 'desktop-host', 'config', 'desktop.cordis.patch.yml'),
+    'utf8',
+  )
+  expect(desktopPatch).toMatch(/id: web-fetch-http[\s\S]*verifySyntheticDns: true/u)
+})
+
 describe.skipIf(!hostAvailable)('HarnessHostProcess', () => {
   it('boots the vendor host child and completes the protocol handshake', async () => {
     const providerRequests: Array<{

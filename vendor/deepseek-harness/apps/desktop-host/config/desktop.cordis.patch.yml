@@ -1,5 +1,9 @@
 # Harness Studio host extensions layered over the current Desktop profile.
 
+- id: web-fetch-http
+  config:
+    verifySyntheticDns: true
+
 - insert:
     - id: scheduled-tasks
       name: '@deepseek-ai/dsh-scheduled-tasks'

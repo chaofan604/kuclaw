@@ -27,7 +27,15 @@ const ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/u
 const SERVER_NAME_PATTERN = /^[A-Za-z0-9_-]{1,32}$/u
 
 const PREFER_WEB_FETCH_PLUGIN = `export const name = 'harness-studio-prefer-web-fetch'
-export const inject = ['tools']
+export const inject = ['tools', 'systemPrompt']
+
+const GUIDANCE = [
+  'When the user writes in Chinese, use Simplified Chinese for both your reasoning and final response; keep code, commands, paths, and product names unchanged.',
+  'For current facts, documentation, or anything that needs the public web, call web_search first, then web_fetch on the best URLs.',
+  'If web_fetch fails, try another relevant search result before answering.',
+  'Describe unavailable sources in user terms; do not expose provider, DNS, or network implementation errors unless the user asks for diagnostics.',
+  'Do not use bash, curl, wget, python, or node to search or download the web.',
+].join(' ')
 
 const WEB_CLI = /\\b(curl|wget|httpie|aria2c)\\b/i
 const SCRIPT_FETCH = /\\b(python3?|node|nodejs|deno|bun)\\b[\\s\\S]{0,400}https?:\\/\\//i
@@ -39,6 +47,11 @@ function commandOf(value) {
 }
 
 export function apply(ctx) {
+  ctx.effect(() => ctx.systemPrompt.section({
+    name: 'harness-studio:guidance',
+    order: ctx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_SUFFIX') - 1,
+    text: GUIDANCE,
+  }))
   ctx.on('tools/pre-execute', async (exec, next) => {
     const decision = await next()
     if (decision.kind !== 'allow') return decision
@@ -316,29 +329,8 @@ export class McpManager {
           fetchProvider: 'http',
         },
       },
-      {
-        id: 'tool-web',
-        disabled: false,
-        config: {
-          search: true,
-          fetch: true,
-          searchTimeoutMs: 60_000,
-        },
-      },
-      {
-        id: 'system-prompt',
-        config: {
-          personaPrefix: 'You are a coding agent powered by the {{model}} model.',
-          personaSuffix: [
-            'When the user writes in Chinese, use Simplified Chinese for both your reasoning and final response; keep code, commands, paths, and product names unchanged.',
-            'Your working directory is {{cwd}}.',
-            'For current facts, documentation, or anything that needs the public web, call web_search first, then web_fetch on the best URLs.',
-            'If web_fetch fails, try another relevant search result before answering.',
-            'Describe unavailable sources in user terms; do not expose provider, DNS, or network implementation errors unless the user asks for diagnostics.',
-            'Do not use bash, curl, wget, python, or node to search or download the web.',
-          ].join(' '),
-        },
-      },
+      // dsh-web-app disables the Host tool-web row and mounts it per Agent preset.
+      // Re-enabling the Host row here makes every preset fail on duplicate tool names.
       {
         insert: [
           {
